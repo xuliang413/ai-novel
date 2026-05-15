@@ -186,3 +186,11 @@ smart:
     db-refresh-enabled: true
     # 数据库配置检测-执行间隔 默认120秒 可选
     db-refresh-interval: 60
+
+novel:
+  neo4j:
+    uri: ${NOVEL_NEO4J_URI:bolt://127.0.0.1:8687}
+    username: ${NOVEL_NEO4J_USERNAME:neo4j}
+    password: ${NOVEL_NEO4J_PASSWORD:your_password}
+    # 是否在应用启动时自动创建 M0 图谱约束
+    init-schema: ${NOVEL_NEO4J_INIT_SCHEMA:true}

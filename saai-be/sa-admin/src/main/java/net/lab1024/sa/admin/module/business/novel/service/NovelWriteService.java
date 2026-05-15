@@ -1,0 +1,749 @@
+package net.lab1024.sa.admin.module.business.novel.service;
+
+import com.alibaba.fastjson.JSON;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import jakarta.annotation.Resource;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelChapterStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelClueStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelGenerationProviderEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelGenerationStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphChangeStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.dao.ChapterGenerationSessionDao;
+import net.lab1024.sa.admin.module.business.novel.dao.GraphChangeLogDao;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.ChapterGenerationSessionEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.GraphChangeLogEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelChapterEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCharacterEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelClueEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelLocationEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelProjectEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelContentReviewPassForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchBackForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchConfirmForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelUndoForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteMockForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteRecoverForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteStartForm;
+import net.lab1024.sa.admin.module.business.novel.domain.model.ChapterIntentCandidateModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.ChapterIntentModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.ContentQualityCheckModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.ContextPreviewItemModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.ContextPreviewModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.NovelGraphPatchModel;
+import net.lab1024.sa.admin.module.business.novel.domain.model.NovelGraphPatchOperationModel;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelChapterVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelGraphPatchVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelUndoVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelWriteDraftVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelWriteRecoverVO;
+import net.lab1024.sa.admin.util.AdminRequestUtil;
+import net.lab1024.sa.base.common.domain.ResponseDTO;
+import net.lab1024.sa.base.common.util.SmartBeanUtil;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * 小说写作服务。
+ *
+ * M0 保留 mock 生成链路；M1 在其上补齐“意图、上下文、正文审阅、GraphPatch、确认、撤销、恢复”最小闭环。
+ */
+@Service
+public class NovelWriteService {
+
+    private static final String PATCH_READY = "READY";
+
+    private static final String PATCH_LOW_CONFIDENCE = "LOW_CONFIDENCE";
+
+    private static final String CONFIDENCE_HIGH = "HIGH";
+
+    private static final String CONFIDENCE_MEDIUM = "MEDIUM";
+
+    private static final String CONFIDENCE_LOW = "LOW";
+
+    @Resource
+    private NovelProjectService novelProjectService;
+
+    @Resource
+    private NovelAssetService novelAssetService;
+
+    @Resource
+    private NovelChapterService novelChapterService;
+
+    @Resource
+    private NovelGraphService novelGraphService;
+
+    @Resource
+    private ChapterGenerationSessionDao generationSessionDao;
+
+    @Resource
+    private GraphChangeLogDao graphChangeLogDao;
+
+    /**
+     * 执行 M0 mock 章节生成。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelChapterVO> writeMock(NovelWriteMockForm form) {
+        NovelProjectEntity project = novelProjectService.getAvailableProject(form.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        Integer chapterNo = form.getChapterNo() == null ? novelChapterService.getNextChapterNo(form.getProjectId()) : form.getChapterNo();
+        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(form.getProjectId());
+        List<NovelLocationEntity> locations = novelAssetService.listLocations(form.getProjectId());
+        List<NovelClueEntity> clues = novelAssetService.listClues(form.getProjectId());
+
+        String contextSnapshot = buildContextSnapshot(project, characters, locations, clues);
+        String title = "第" + chapterNo + "章：" + project.getProjectName();
+        String summary = "第" + chapterNo + "章 mock 草稿。";
+        String content = buildMockContent(project, chapterNo, characters, locations, clues);
+
+        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
+        session.setProjectId(form.getProjectId());
+        session.setChapterNo(chapterNo);
+        session.setProvider(NovelGenerationProviderEnum.MOCK.getValue());
+        session.setStatus(NovelGenerationStatusEnum.SUCCESS.getValue());
+        session.setPromptSnapshot("/write " + chapterNo);
+        session.setContextSnapshot(contextSnapshot);
+        session.setResultExcerpt(StringUtils.abbreviate(content, 500));
+        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        generationSessionDao.insert(session);
+
+        NovelChapterEntity chapter = saveDraftChapter(form.getProjectId(), chapterNo, title, summary, content, session.getSessionId());
+        session.setChapterId(chapter.getChapterId());
+        generationSessionDao.updateById(session);
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeChapter(chapter);
+        return ResponseDTO.ok(toChapterVO(chapter));
+    }
+
+    /**
+     * M1 启动 mock 写作：生成 ChapterIntent、ContextPreview、正文草稿并停在 CONTENT_REVIEW。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelWriteDraftVO> startMock(NovelWriteStartForm form) {
+        NovelProjectEntity project = novelProjectService.getAvailableProject(form.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        Integer chapterNo = form.getChapterNo() == null ? novelChapterService.getNextChapterNo(form.getProjectId()) : form.getChapterNo();
+        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(form.getProjectId());
+        List<NovelLocationEntity> locations = novelAssetService.listLocations(form.getProjectId());
+        List<NovelClueEntity> clues = novelAssetService.listClues(form.getProjectId());
+
+        ChapterIntentModel intent = buildChapterIntent(form, project, chapterNo, characters, locations, clues);
+        ContextPreviewModel contextPreview = buildContextPreview(project, chapterNo, intent, characters, locations, clues);
+        String title = "第" + chapterNo + "章：" + project.getProjectName();
+        String summary = "第" + chapterNo + "章 M1 待审阅草稿。";
+        String content = buildMockContent(project, chapterNo, characters, locations, clues);
+        ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
+
+        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
+        session.setProjectId(form.getProjectId());
+        session.setChapterNo(chapterNo);
+        session.setProvider(NovelGenerationProviderEnum.MOCK.getValue());
+        session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
+        session.setPromptSnapshot("/write " + chapterNo);
+        session.setIntentJson(JSON.toJSONString(intent));
+        session.setContextSnapshot(JSON.toJSONString(contextPreview));
+        session.setContentReviewJson(JSON.toJSONString(qualityCheck));
+        session.setResultExcerpt(StringUtils.abbreviate(content, 500));
+        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        generationSessionDao.insert(session);
+
+        NovelChapterEntity chapter = saveDraftChapter(form.getProjectId(), chapterNo, title, summary, content, session.getSessionId());
+        session.setChapterId(chapter.getChapterId());
+        generationSessionDao.updateById(session);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeChapter(chapter);
+
+        NovelWriteDraftVO vo = new NovelWriteDraftVO();
+        vo.setSessionId(session.getSessionId());
+        vo.setSessionStatus(session.getStatus());
+        vo.setChapter(toChapterVO(chapter));
+        vo.setChapterIntent(intent);
+        vo.setContextPreview(contextPreview);
+        vo.setQualityCheck(qualityCheck);
+        return ResponseDTO.ok(vo);
+    }
+
+    /**
+     * 正文审阅通过后生成 GraphPatch，并停在 PATCH_REVIEW。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelGraphPatchVO> passContentReview(NovelContentReviewPassForm form) {
+        ChapterGenerationSessionEntity session = generationSessionDao.selectById(form.getSessionId());
+        if (session == null) {
+            return ResponseDTO.userErrorParam("生成会话不存在");
+        }
+
+        NovelChapterEntity chapter = novelChapterService.getById(form.getChapterId());
+        if (chapter == null || !Objects.equals(chapter.getProjectId(), session.getProjectId())) {
+            return ResponseDTO.userErrorParam("章节不存在");
+        }
+
+        if (StringUtils.isNotBlank(form.getContent())) {
+            chapter.setContent(form.getContent());
+        }
+        if (StringUtils.isNotBlank(form.getSummary())) {
+            chapter.setSummary(form.getSummary());
+        }
+
+        ChapterIntentModel intent = parse(session.getIntentJson(), ChapterIntentModel.class);
+        ContentQualityCheckModel qualityCheck = buildQualityCheck(chapter.getContent(), intent);
+        NovelGraphPatchModel graphPatch = buildGraphPatch(chapter);
+        NovelGraphPatchModel inversePatch = buildInversePatch(graphPatch);
+
+        chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_CONFIRM.getValue());
+        novelChapterService.save(chapter);
+
+        session.setStatus(NovelGenerationStatusEnum.PATCH_REVIEW.getValue());
+        session.setChapterId(chapter.getChapterId());
+        session.setContentReviewJson(JSON.toJSONString(qualityCheck));
+        session.setGraphPatchJson(JSON.toJSONString(graphPatch));
+        session.setInversePatchJson(JSON.toJSONString(inversePatch));
+        session.setOperationBatchId(graphPatch.getOperationBatchId());
+        generationSessionDao.updateById(session);
+
+        NovelGraphPatchVO vo = buildGraphPatchVO(session, chapter, graphPatch, inversePatch);
+        return ResponseDTO.ok(vo);
+    }
+
+    /**
+     * 用户确认 GraphPatch 后执行白名单图谱写入，并发布正文。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelChapterVO> confirmPatch(NovelPatchConfirmForm form) {
+        ChapterGenerationSessionEntity session = generationSessionDao.selectById(form.getSessionId());
+        if (session == null) {
+            return ResponseDTO.userErrorParam("生成会话不存在");
+        }
+        if (!NovelGenerationStatusEnum.PATCH_REVIEW.getValue().equals(session.getStatus())) {
+            return ResponseDTO.userErrorParam("当前会话不在 GraphPatch 确认状态");
+        }
+
+        NovelChapterEntity chapter = novelChapterService.getById(session.getChapterId());
+        if (chapter == null) {
+            return ResponseDTO.userErrorParam("章节不存在");
+        }
+
+        NovelGraphPatchModel graphPatch = parse(session.getGraphPatchJson(), NovelGraphPatchModel.class);
+        NovelGraphPatchModel inversePatch = parse(session.getInversePatchJson(), NovelGraphPatchModel.class);
+        if (graphPatch == null || inversePatch == null) {
+            return ResponseDTO.userErrorParam("待确认 GraphPatch 不存在");
+        }
+
+        NovelGraphPatchModel executablePatch = filterPatch(graphPatch, form.getOperationIds(), true);
+        if (CollectionUtils.isEmpty(executablePatch.getOperations())) {
+            return ResponseDTO.userErrorParam("没有可执行的 GraphPatch 操作");
+        }
+        NovelGraphPatchModel executableInversePatch = filterPatch(inversePatch, executablePatch.getOperations().stream()
+                .map(NovelGraphPatchOperationModel::getOperationId)
+                .collect(Collectors.toList()), false);
+
+        session.setStatus(NovelGenerationStatusEnum.APPLYING_PATCH.getValue());
+        generationSessionDao.updateById(session);
+
+        try {
+            novelGraphService.applyGraphPatch(executablePatch);
+        } catch (Exception e) {
+            chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_UPDATE.getValue());
+            novelChapterService.save(chapter);
+            session.setStatus(NovelGenerationStatusEnum.PATCH_REVIEW.getValue());
+            session.setErrorMessage(StringUtils.abbreviate(e.getMessage(), 1000));
+            generationSessionDao.updateById(session);
+            return ResponseDTO.userErrorParam("图谱更新失败：" + StringUtils.abbreviate(e.getMessage(), 200));
+        }
+
+        GraphChangeLogEntity changeLog = new GraphChangeLogEntity();
+        changeLog.setProjectId(chapter.getProjectId());
+        changeLog.setChapterId(chapter.getChapterId());
+        changeLog.setChapterNo(chapter.getChapterNo());
+        changeLog.setSessionId(session.getSessionId());
+        changeLog.setPatchId(executablePatch.getPatchId());
+        changeLog.setOperationBatchId(executablePatch.getOperationBatchId());
+        changeLog.setPatchJson(JSON.toJSONString(executablePatch));
+        changeLog.setInversePatchJson(JSON.toJSONString(executableInversePatch));
+        changeLog.setStatus(NovelGraphChangeStatusEnum.APPLIED.getValue());
+        changeLog.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        graphChangeLogDao.insert(changeLog);
+
+        chapter.setStatus(NovelChapterStatusEnum.PUBLISHED.getValue());
+        novelChapterService.save(chapter);
+        novelGraphService.mergeChapter(chapter);
+
+        session.setStatus(NovelGenerationStatusEnum.SUCCESS.getValue());
+        session.setGraphPatchJson(JSON.toJSONString(executablePatch));
+        session.setInversePatchJson(JSON.toJSONString(executableInversePatch));
+        session.setErrorMessage(null);
+        generationSessionDao.updateById(session);
+        return ResponseDTO.ok(toChapterVO(chapter));
+    }
+
+    /**
+     * 从 PATCH_REVIEW 返回 CONTENT_REVIEW，正文保留草稿，候选 Patch 丢弃。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelWriteRecoverVO> backToContentReview(NovelPatchBackForm form) {
+        ChapterGenerationSessionEntity session = generationSessionDao.selectById(form.getSessionId());
+        if (session == null) {
+            return ResponseDTO.userErrorParam("生成会话不存在");
+        }
+
+        NovelChapterEntity chapter = session.getChapterId() == null ? null : novelChapterService.getById(session.getChapterId());
+        if (chapter != null) {
+            chapter.setStatus(NovelChapterStatusEnum.DRAFT.getValue());
+            novelChapterService.save(chapter);
+        }
+
+        session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
+        session.setGraphPatchJson(null);
+        session.setInversePatchJson(null);
+        session.setOperationBatchId(null);
+        generationSessionDao.updateById(session);
+        return ResponseDTO.ok(buildRecoverVO(session));
+    }
+
+    /**
+     * 恢复项目最近一次或指定章节的写作会话。
+     */
+    public ResponseDTO<NovelWriteRecoverVO> recover(NovelWriteRecoverForm form) {
+        ChapterGenerationSessionEntity session = latestSession(form.getProjectId(), form.getChapterNo());
+        if (session == null) {
+            return ResponseDTO.userErrorParam("没有可恢复的写作会话");
+        }
+        return ResponseDTO.ok(buildRecoverVO(session));
+    }
+
+    /**
+     * 撤销最近一次已应用的图谱变更。正文保留，并标记为待同步图谱。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<NovelUndoVO> undo(NovelUndoForm form) {
+        GraphChangeLogEntity changeLog = graphChangeLogDao.selectOne(new LambdaQueryWrapper<GraphChangeLogEntity>()
+                .eq(GraphChangeLogEntity::getProjectId, form.getProjectId())
+                .eq(GraphChangeLogEntity::getStatus, NovelGraphChangeStatusEnum.APPLIED.getValue())
+                .orderByDesc(GraphChangeLogEntity::getChangeLogId)
+                .last("limit 1"));
+        if (changeLog == null) {
+            return ResponseDTO.userErrorParam("没有可撤销的图谱变更");
+        }
+
+        NovelGraphPatchModel inversePatch = parse(changeLog.getInversePatchJson(), NovelGraphPatchModel.class);
+        if (inversePatch == null || CollectionUtils.isEmpty(inversePatch.getOperations())) {
+            return ResponseDTO.userErrorParam("反向 GraphPatch 不存在");
+        }
+
+        try {
+            novelGraphService.applyGraphPatch(inversePatch);
+        } catch (Exception e) {
+            changeLog.setStatus(NovelGraphChangeStatusEnum.FAILED.getValue());
+            changeLog.setErrorMessage(StringUtils.abbreviate(e.getMessage(), 1000));
+            graphChangeLogDao.updateById(changeLog);
+            return ResponseDTO.userErrorParam("撤销图谱变更失败：" + StringUtils.abbreviate(e.getMessage(), 200));
+        }
+
+        changeLog.setStatus(NovelGraphChangeStatusEnum.UNDONE.getValue());
+        graphChangeLogDao.updateById(changeLog);
+
+        NovelChapterEntity chapter = changeLog.getChapterId() == null ? null : novelChapterService.getById(changeLog.getChapterId());
+        if (chapter != null) {
+            chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_UPDATE.getValue());
+            novelChapterService.save(chapter);
+            novelGraphService.mergeChapter(chapter);
+        }
+
+        NovelUndoVO vo = new NovelUndoVO();
+        vo.setOperationBatchId(changeLog.getOperationBatchId());
+        vo.setChapterId(changeLog.getChapterId());
+        vo.setChapterNo(changeLog.getChapterNo());
+        vo.setGraphChangeStatus(changeLog.getStatus());
+        vo.setChapterStatus(chapter == null ? null : chapter.getStatus());
+        vo.setInversePatch(inversePatch);
+        return ResponseDTO.ok(vo);
+    }
+
+    private NovelChapterEntity saveDraftChapter(Long projectId, Integer chapterNo, String title, String summary, String content, Long sessionId) {
+        NovelChapterEntity chapter = novelChapterService.getByProjectAndNo(projectId, chapterNo);
+        if (chapter == null) {
+            chapter = new NovelChapterEntity();
+            chapter.setProjectId(projectId);
+            chapter.setChapterNo(chapterNo);
+        }
+        chapter.setTitle(title);
+        chapter.setSummary(summary);
+        chapter.setContent(content);
+        chapter.setStatus(NovelChapterStatusEnum.DRAFT.getValue());
+        chapter.setGenerationSessionId(sessionId);
+        novelChapterService.save(chapter);
+        return chapter;
+    }
+
+    private ChapterIntentModel buildChapterIntent(NovelWriteStartForm form,
+                                                  NovelProjectEntity project,
+                                                  Integer chapterNo,
+                                                  List<NovelCharacterEntity> characters,
+                                                  List<NovelLocationEntity> locations,
+                                                  List<NovelClueEntity> clues) {
+        ChapterIntentModel intent = new ChapterIntentModel();
+        intent.setProjectId(project.getProjectId());
+        intent.setChapterNo(chapterNo);
+        intent.setPov(StringUtils.defaultIfBlank(form.getPov(), StringUtils.defaultIfBlank(project.getProtagonist(), firstCharacter(characters))));
+        intent.setChapterGoal(StringUtils.defaultIfBlank(form.getChapterGoal(), "推进《" + project.getProjectName() + "》第" + chapterNo + "章的主线冲突"));
+        intent.setCandidateCharacters(toIntentCandidates(filterByNames(characters, form.getCandidateCharacters(), NovelCharacterEntity::getCharacterName), NovelCharacterEntity::getCharacterId, NovelCharacterEntity::getCharacterName, NovelCharacterEntity::getRoleType, "USER_OR_PROJECT"));
+        intent.setTargetClues(toIntentCandidates(filterByNames(clues, form.getTargetClues(), NovelClueEntity::getClueName), NovelClueEntity::getClueId, NovelClueEntity::getClueName, NovelClueEntity::getClueType, "USER_OR_ACTIVE_CLUE"));
+        intent.setCandidateLocations(toIntentCandidates(filterByNames(locations, form.getCandidateLocations(), NovelLocationEntity::getLocationName), NovelLocationEntity::getLocationId, NovelLocationEntity::getLocationName, NovelLocationEntity::getLocationType, "USER_OR_PROJECT"));
+        if (CollectionUtils.isNotEmpty(form.getExtraInstructions())) {
+            intent.setExtraInstructions(form.getExtraInstructions());
+        }
+        return intent;
+    }
+
+    private <T> List<T> filterByNames(List<T> source, List<String> names, Function<T, String> nameGetter) {
+        if (CollectionUtils.isEmpty(source)) {
+            return new ArrayList<>();
+        }
+        if (CollectionUtils.isEmpty(names)) {
+            return source.stream().limit(5).collect(Collectors.toList());
+        }
+        Set<String> nameSet = names.stream().filter(StringUtils::isNotBlank).collect(Collectors.toSet());
+        List<T> matched = source.stream()
+                .filter(item -> nameSet.contains(nameGetter.apply(item)))
+                .collect(Collectors.toList());
+        return CollectionUtils.isEmpty(matched) ? source.stream().limit(5).collect(Collectors.toList()) : matched;
+    }
+
+    private <T> List<ChapterIntentCandidateModel> toIntentCandidates(List<T> source,
+                                                                     Function<T, Long> idGetter,
+                                                                     Function<T, String> nameGetter,
+                                                                     Function<T, String> typeGetter,
+                                                                     String sourceType) {
+        List<ChapterIntentCandidateModel> result = new ArrayList<>();
+        int priority = 1;
+        for (T item : source) {
+            ChapterIntentCandidateModel candidate = new ChapterIntentCandidateModel();
+            candidate.setId(idGetter.apply(item));
+            candidate.setName(nameGetter.apply(item));
+            candidate.setType(typeGetter.apply(item));
+            candidate.setSource(sourceType);
+            candidate.setRequired(priority <= 3);
+            candidate.setPriority(priority++);
+            result.add(candidate);
+        }
+        return result;
+    }
+
+    private ContextPreviewModel buildContextPreview(NovelProjectEntity project,
+                                                    Integer chapterNo,
+                                                    ChapterIntentModel intent,
+                                                    List<NovelCharacterEntity> characters,
+                                                    List<NovelLocationEntity> locations,
+                                                    List<NovelClueEntity> clues) {
+        ContextPreviewModel preview = new ContextPreviewModel();
+        preview.setProjectId(project.getProjectId());
+        preview.setChapterNo(chapterNo);
+        preview.setProjectSummary(project.getSummary());
+        preview.setCharacterCards(toContextItems(characters, NovelCharacterEntity::getCharacterId, NovelCharacterEntity::getCharacterName, NovelCharacterEntity::getRoleType, NovelCharacterEntity::getSummary, intent.getCandidateCharacters()));
+        preview.setClueCards(toContextItems(clues, NovelClueEntity::getClueId, NovelClueEntity::getClueName, NovelClueEntity::getClueType, NovelClueEntity::getSummary, intent.getTargetClues()));
+        preview.setLocationCards(toContextItems(locations, NovelLocationEntity::getLocationId, NovelLocationEntity::getLocationName, NovelLocationEntity::getLocationType, NovelLocationEntity::getSummary, intent.getCandidateLocations()));
+        int textLength = StringUtils.length(project.getSummary())
+                + preview.getCharacterCards().stream().mapToInt(item -> StringUtils.length(item.getSummary())).sum()
+                + preview.getClueCards().stream().mapToInt(item -> StringUtils.length(item.getSummary())).sum()
+                + preview.getLocationCards().stream().mapToInt(item -> StringUtils.length(item.getSummary())).sum();
+        preview.setEstimatedTokens(Math.max(1, textLength / 2));
+        preview.setTruncatedItems(0);
+        return preview;
+    }
+
+    private <T> List<ContextPreviewItemModel> toContextItems(List<T> source,
+                                                            Function<T, Long> idGetter,
+                                                            Function<T, String> nameGetter,
+                                                            Function<T, String> typeGetter,
+                                                            Function<T, String> summaryGetter,
+                                                            List<ChapterIntentCandidateModel> candidates) {
+        Set<Long> candidateIds = candidates.stream().map(ChapterIntentCandidateModel::getId).collect(Collectors.toSet());
+        List<ContextPreviewItemModel> result = new ArrayList<>();
+        int priority = 1;
+        for (T item : source) {
+            Long id = idGetter.apply(item);
+            if (!candidateIds.contains(id)) {
+                continue;
+            }
+            ContextPreviewItemModel contextItem = new ContextPreviewItemModel();
+            contextItem.setId(id);
+            contextItem.setName(nameGetter.apply(item));
+            contextItem.setType(typeGetter.apply(item));
+            contextItem.setSummary(StringUtils.abbreviate(StringUtils.defaultString(summaryGetter.apply(item)), 300));
+            contextItem.setSource("ChapterIntent");
+            contextItem.setRequired(priority <= 3);
+            contextItem.setPriority(priority++);
+            result.add(contextItem);
+        }
+        return result;
+    }
+
+    private ContentQualityCheckModel buildQualityCheck(String content, ChapterIntentModel intent) {
+        ContentQualityCheckModel qualityCheck = new ContentQualityCheckModel();
+        String safeContent = StringUtils.defaultString(content);
+        qualityCheck.setWordCount(safeContent.replaceAll("\\s+", "").length());
+        String pov = intent == null ? null : intent.getPov();
+        qualityCheck.setPov(pov);
+        qualityCheck.setPovMentioned(StringUtils.isBlank(pov) || safeContent.contains(pov));
+        qualityCheck.setHasChapterEnding(safeContent.contains("下一章") || safeContent.contains("结尾") || safeContent.contains("入口"));
+        if (qualityCheck.getWordCount() < 500) {
+            qualityCheck.getWarnings().add("当前 mock 草稿字数偏短，真实模型接入后需放宽目标字数。");
+        }
+        if (!Boolean.TRUE.equals(qualityCheck.getPovMentioned())) {
+            qualityCheck.getWarnings().add("正文未显式出现 POV 角色。");
+        }
+        if (!Boolean.TRUE.equals(qualityCheck.getHasChapterEnding())) {
+            qualityCheck.getWarnings().add("未检测到清晰章末推进提示。");
+        }
+        return qualityCheck;
+    }
+
+    private NovelGraphPatchModel buildGraphPatch(NovelChapterEntity chapter) {
+        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(chapter.getProjectId());
+        List<NovelLocationEntity> locations = novelAssetService.listLocations(chapter.getProjectId());
+        List<NovelClueEntity> clues = novelAssetService.listClues(chapter.getProjectId());
+
+        NovelGraphPatchModel patch = new NovelGraphPatchModel();
+        patch.setPatchId(UUID.randomUUID().toString());
+        patch.setOperationBatchId(UUID.randomUUID().toString());
+        patch.setProjectId(chapter.getProjectId());
+        patch.setChapterId(chapter.getChapterId());
+        patch.setChapterNo(chapter.getChapterNo());
+        patch.setStatus(PATCH_READY);
+
+        addChapterSummaryOperation(patch, chapter);
+        characters.stream().limit(5).forEach(character -> addAppearanceOperation(patch, "CHARACTER", character.getCharacterId(), character.getCharacterName(), chapter.getContent()));
+        locations.stream().limit(2).forEach(location -> addAppearanceOperation(patch, "LOCATION", location.getLocationId(), location.getLocationName(), chapter.getContent()));
+        clues.stream().limit(1).forEach(clue -> addClueOperation(patch, clue, chapter));
+        if (patch.getOperations().stream().anyMatch(operation -> PATCH_LOW_CONFIDENCE.equals(operation.getValidationStatus()))) {
+            patch.getWarnings().add("存在低置信操作，默认不勾选；确认前请人工检查。");
+        }
+        return patch;
+    }
+
+    private void addChapterSummaryOperation(NovelGraphPatchModel patch, NovelChapterEntity chapter) {
+        NovelGraphPatchOperationModel operation = baseOperation(patch, "UPDATE_CHAPTER_SUMMARY", "CHAPTER", chapter.getChapterId(), "第" + chapter.getChapterNo() + "章");
+        operation.setBeforeStatus(chapter.getStatus());
+        operation.setAfterStatus(NovelChapterStatusEnum.PUBLISHED.getValue());
+        operation.setBeforeSummary(chapter.getSummary());
+        operation.setAfterSummary(chapter.getSummary());
+        operation.setConfidence(CONFIDENCE_HIGH);
+        operation.setValidationStatus(PATCH_READY);
+        operation.setSelected(true);
+        operation.setEvidence("章节正文审阅通过。");
+        operation.setReason("发布章节时同步更新 Chapter 节点摘要和状态。");
+        patch.getOperations().add(operation);
+    }
+
+    private void addAppearanceOperation(NovelGraphPatchModel patch, String targetType, Long targetId, String targetName, String content) {
+        boolean mentioned = StringUtils.contains(content, targetName);
+        NovelGraphPatchOperationModel operation = baseOperation(patch, "MARK_APPEARANCE", targetType, targetId, targetName);
+        operation.setConfidence(mentioned ? CONFIDENCE_HIGH : CONFIDENCE_LOW);
+        operation.setValidationStatus(mentioned ? PATCH_READY : PATCH_LOW_CONFIDENCE);
+        operation.setSelected(mentioned);
+        operation.setEvidence(mentioned ? "正文中出现“" + targetName + "”。" : "来自上下文候选，但正文未显式出现。");
+        operation.setReason("记录本章出场，用于后续前章延续和角色/地点检索。");
+        patch.getOperations().add(operation);
+    }
+
+    private void addClueOperation(NovelGraphPatchModel patch, NovelClueEntity clue, NovelChapterEntity chapter) {
+        boolean mentioned = StringUtils.contains(chapter.getContent(), clue.getClueName());
+        NovelGraphPatchOperationModel operation = baseOperation(patch, "ADVANCE_CLUE", "CLUE", clue.getClueId(), clue.getClueName());
+        operation.setBeforeStatus(clue.getClueStatus());
+        operation.setAfterStatus(NovelClueStatusEnum.ACTIVE.getValue());
+        operation.setBeforeSummary(clue.getSummary());
+        operation.setAfterSummary(StringUtils.abbreviate(StringUtils.defaultString(clue.getSummary()) + " 第" + chapter.getChapterNo() + "章出现推进迹象。", 500));
+        operation.setConfidence(mentioned ? CONFIDENCE_HIGH : CONFIDENCE_MEDIUM);
+        operation.setValidationStatus(PATCH_READY);
+        operation.setSelected(true);
+        operation.setEvidence(mentioned ? "正文中出现线索“" + clue.getClueName() + "”。" : "使用本章目标线索作为 mock 推进项。");
+        operation.setReason("推进线索状态，并建立 Chapter -> Clue 的推进关系。");
+        patch.getOperations().add(operation);
+    }
+
+    private NovelGraphPatchOperationModel baseOperation(NovelGraphPatchModel patch, String operationType, String targetType, Long targetId, String targetName) {
+        NovelGraphPatchOperationModel operation = new NovelGraphPatchOperationModel();
+        operation.setOperationId(UUID.randomUUID().toString());
+        operation.setOperationType(operationType);
+        operation.setTargetType(targetType);
+        operation.setTargetId(targetId);
+        operation.setTargetName(targetName);
+        return operation;
+    }
+
+    private NovelGraphPatchModel buildInversePatch(NovelGraphPatchModel graphPatch) {
+        NovelGraphPatchModel inversePatch = new NovelGraphPatchModel();
+        inversePatch.setPatchId(UUID.randomUUID().toString());
+        inversePatch.setOperationBatchId(graphPatch.getOperationBatchId());
+        inversePatch.setProjectId(graphPatch.getProjectId());
+        inversePatch.setChapterId(graphPatch.getChapterId());
+        inversePatch.setChapterNo(graphPatch.getChapterNo());
+        inversePatch.setStatus(PATCH_READY);
+        for (NovelGraphPatchOperationModel operation : graphPatch.getOperations()) {
+            NovelGraphPatchOperationModel inverseOperation = new NovelGraphPatchOperationModel();
+            inverseOperation.setOperationId(operation.getOperationId());
+            inverseOperation.setTargetType(operation.getTargetType());
+            inverseOperation.setTargetId(operation.getTargetId());
+            inverseOperation.setTargetName(operation.getTargetName());
+            inverseOperation.setBeforeStatus(operation.getAfterStatus());
+            inverseOperation.setAfterStatus(operation.getBeforeStatus());
+            inverseOperation.setBeforeSummary(operation.getAfterSummary());
+            inverseOperation.setAfterSummary(operation.getBeforeSummary());
+            inverseOperation.setConfidence(operation.getConfidence());
+            inverseOperation.setValidationStatus(operation.getValidationStatus());
+            inverseOperation.setSelected(operation.getSelected());
+            inverseOperation.setEvidence("反向操作：" + StringUtils.defaultString(operation.getEvidence()));
+            inverseOperation.setReason("撤销 GraphPatch 操作。");
+            if ("UPDATE_CHAPTER_SUMMARY".equals(operation.getOperationType())) {
+                inverseOperation.setOperationType("RESTORE_CHAPTER_SUMMARY");
+            } else if ("MARK_APPEARANCE".equals(operation.getOperationType())) {
+                inverseOperation.setOperationType("UNMARK_APPEARANCE");
+            } else if ("ADVANCE_CLUE".equals(operation.getOperationType())) {
+                inverseOperation.setOperationType("RESTORE_CLUE");
+            }
+            inversePatch.getOperations().add(inverseOperation);
+        }
+        return inversePatch;
+    }
+
+    private NovelGraphPatchModel filterPatch(NovelGraphPatchModel patch, List<String> operationIds, boolean defaultSelectedOnly) {
+        Set<String> operationIdSet = CollectionUtils.isEmpty(operationIds) ? new HashSet<>() : new HashSet<>(operationIds);
+        NovelGraphPatchModel filtered = new NovelGraphPatchModel();
+        filtered.setPatchId(patch.getPatchId());
+        filtered.setOperationBatchId(patch.getOperationBatchId());
+        filtered.setProjectId(patch.getProjectId());
+        filtered.setChapterId(patch.getChapterId());
+        filtered.setChapterNo(patch.getChapterNo());
+        filtered.setStatus(patch.getStatus());
+        filtered.setWarnings(patch.getWarnings());
+        filtered.setOperations(patch.getOperations().stream()
+                .filter(operation -> CollectionUtils.isEmpty(operationIds)
+                        ? !defaultSelectedOnly || Boolean.TRUE.equals(operation.getSelected())
+                        : operationIdSet.contains(operation.getOperationId()))
+                .filter(operation -> !PATCH_LOW_CONFIDENCE.equals(operation.getValidationStatus()) || operationIdSet.contains(operation.getOperationId()))
+                .collect(Collectors.toList()));
+        return filtered;
+    }
+
+    private NovelGraphPatchVO buildGraphPatchVO(ChapterGenerationSessionEntity session,
+                                                NovelChapterEntity chapter,
+                                                NovelGraphPatchModel graphPatch,
+                                                NovelGraphPatchModel inversePatch) {
+        NovelGraphPatchVO vo = new NovelGraphPatchVO();
+        vo.setSessionId(session.getSessionId());
+        vo.setSessionStatus(session.getStatus());
+        vo.setChapter(toChapterVO(chapter));
+        vo.setGraphPatch(graphPatch);
+        vo.setInversePatch(inversePatch);
+        return vo;
+    }
+
+    private NovelWriteRecoverVO buildRecoverVO(ChapterGenerationSessionEntity session) {
+        NovelWriteRecoverVO vo = new NovelWriteRecoverVO();
+        vo.setSessionId(session.getSessionId());
+        vo.setSessionStatus(session.getStatus());
+        vo.setOperationBatchId(session.getOperationBatchId());
+        NovelChapterEntity chapter = session.getChapterId() == null ? null : novelChapterService.getById(session.getChapterId());
+        vo.setChapter(chapter == null ? null : toChapterVO(chapter));
+        vo.setChapterIntent(parse(session.getIntentJson(), ChapterIntentModel.class));
+        vo.setContextPreview(parse(session.getContextSnapshot(), ContextPreviewModel.class));
+        vo.setQualityCheck(parse(session.getContentReviewJson(), ContentQualityCheckModel.class));
+        vo.setGraphPatch(parse(session.getGraphPatchJson(), NovelGraphPatchModel.class));
+        vo.setInversePatch(parse(session.getInversePatchJson(), NovelGraphPatchModel.class));
+        return vo;
+    }
+
+    private ChapterGenerationSessionEntity latestSession(Long projectId, Integer chapterNo) {
+        LambdaQueryWrapper<ChapterGenerationSessionEntity> wrapper = new LambdaQueryWrapper<ChapterGenerationSessionEntity>()
+                .eq(ChapterGenerationSessionEntity::getProjectId, projectId)
+                .eq(chapterNo != null, ChapterGenerationSessionEntity::getChapterNo, chapterNo)
+                .orderByDesc(ChapterGenerationSessionEntity::getSessionId)
+                .last("limit 1");
+        return generationSessionDao.selectOne(wrapper);
+    }
+
+    private <T> T parse(String json, Class<T> clazz) {
+        if (StringUtils.isBlank(json)) {
+            return null;
+        }
+        return JSON.parseObject(json, clazz);
+    }
+
+    private NovelChapterVO toChapterVO(NovelChapterEntity chapter) {
+        return SmartBeanUtil.copy(chapter, NovelChapterVO.class);
+    }
+
+    /**
+     * 构建本次生成使用的上下文快照。
+     *
+     * M0 先保存可读文本，M1 新接口使用结构化 ContextPreview JSON。
+     */
+    private String buildContextSnapshot(NovelProjectEntity project,
+                                        List<NovelCharacterEntity> characters,
+                                        List<NovelLocationEntity> locations,
+                                        List<NovelClueEntity> clues) {
+        return "项目=" + project.getProjectName()
+                + "；角色=" + characters.stream().map(NovelCharacterEntity::getCharacterName).collect(Collectors.joining("，"))
+                + "；地点=" + locations.stream().map(NovelLocationEntity::getLocationName).collect(Collectors.joining("，"))
+                + "；线索=" + clues.stream().map(NovelClueEntity::getClueName).collect(Collectors.joining("，"));
+    }
+
+    /**
+     * 构建中文 mock 草稿。
+     */
+    private String buildMockContent(NovelProjectEntity project,
+                                    Integer chapterNo,
+                                    List<NovelCharacterEntity> characters,
+                                    List<NovelLocationEntity> locations,
+                                    List<NovelClueEntity> clues) {
+        String protagonist = StringUtils.defaultIfBlank(project.getProtagonist(), firstCharacter(characters));
+        String location = firstLocation(locations);
+        String clue = firstClue(clues);
+        return """
+                # %s
+
+                这是《%s》的第 %d 章 M1 模拟草稿。
+                %s 来到%s，带着一个明确目标：推动剧情向前，同时不丢掉故事最初承诺给读者的期待。当前作品类型是“%s”，本章会围绕安全写作闭环展开。
+                本章显性线索是“%s”。它暂时不会被解决，而是先埋入场景中，方便后续 GraphPatch 流程追踪线索状态。
+                章节结尾，%s 做出一个看似很小、却无法撤回的选择，为下一章留下继续推进的入口。
+                """.formatted(
+                "第" + chapterNo + "章",
+                project.getProjectName(),
+                chapterNo,
+                protagonist,
+                location,
+                StringUtils.defaultIfBlank(project.getGenre(), "未分类"),
+                clue,
+                protagonist
+        );
+    }
+
+    private String firstCharacter(List<NovelCharacterEntity> characters) {
+        return characters.isEmpty() ? "主角" : characters.get(0).getCharacterName();
+    }
+
+    private String firstLocation(List<NovelLocationEntity> locations) {
+        return locations.isEmpty() ? "开场地点" : locations.get(0).getLocationName();
+    }
+
+    private String firstClue(List<NovelClueEntity> clues) {
+        return clues.isEmpty() ? "第一条未解线索" : clues.get(0).getClueName();
+    }
+}
