@@ -6,6 +6,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说项目列表返回对象。
+ *
+ * 这是管理页看到的项目摘要，不包含大段章节内容。
  */
 @Data
 public class NovelProjectVO {
@@ -50,7 +52,13 @@ public class NovelProjectVO {
      */
     private Long createUserId;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

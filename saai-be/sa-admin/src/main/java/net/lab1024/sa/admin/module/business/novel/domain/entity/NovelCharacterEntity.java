@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说角色实体。
+ *
+ * 角色基础资料存 MySQL，当前状态、目标、位置等会同步到 Neo4j 参与写作检索。
  */
 @Data
 @TableName("t_novel_character")
@@ -50,7 +52,13 @@ public class NovelCharacterEntity implements Serializable {
      */
     private Boolean deletedFlag;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

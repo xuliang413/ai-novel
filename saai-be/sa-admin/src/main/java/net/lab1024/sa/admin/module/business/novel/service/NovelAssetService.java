@@ -1,21 +1,44 @@
 package net.lab1024.sa.admin.module.business.novel.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import jakarta.annotation.Resource;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelCharacterStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelItemStatusEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelClueStatusEnum;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelAliasDao;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelCheatDao;
 import net.lab1024.sa.admin.module.business.novel.dao.NovelCharacterDao;
 import net.lab1024.sa.admin.module.business.novel.dao.NovelClueDao;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelEventDao;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelItemDao;
 import net.lab1024.sa.admin.module.business.novel.dao.NovelLocationDao;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelNarrativeRuleDao;
+import net.lab1024.sa.admin.module.business.novel.dao.NovelVolumeDao;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelAliasEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCheatEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCharacterEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelClueEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelEventEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelItemEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelLocationEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelNarrativeRuleEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelProjectEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelVolumeEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAliasAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAssetQueryForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCheatAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCharacterAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelClueAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelEventAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelItemAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelLocationAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelNarrativeRuleAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelVolumeAddForm;
+import net.lab1024.sa.base.common.domain.PageResult;
 import net.lab1024.sa.base.common.domain.ResponseDTO;
 import net.lab1024.sa.base.common.util.SmartBeanUtil;
+import net.lab1024.sa.base.common.util.SmartPageUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +59,24 @@ public class NovelAssetService {
 
     @Resource
     private NovelClueDao novelClueDao;
+
+    @Resource
+    private NovelVolumeDao novelVolumeDao;
+
+    @Resource
+    private NovelItemDao novelItemDao;
+
+    @Resource
+    private NovelEventDao novelEventDao;
+
+    @Resource
+    private NovelCheatDao novelCheatDao;
+
+    @Resource
+    private NovelAliasDao novelAliasDao;
+
+    @Resource
+    private NovelNarrativeRuleDao novelNarrativeRuleDao;
 
     @Resource
     private NovelProjectService novelProjectService;
@@ -103,6 +144,269 @@ public class NovelAssetService {
     }
 
     /**
+     * 新增卷，并建立 Project -> Volume 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addVolume(NovelVolumeAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelVolumeEntity entity = SmartBeanUtil.copy(addForm, NovelVolumeEntity.class);
+        entity.setDeletedFlag(false);
+        novelVolumeDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeVolume(entity);
+        return ResponseDTO.ok(entity.getVolumeId());
+    }
+
+    /**
+     * 新增物品，并建立 Project -> Item 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addItem(NovelItemAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelItemEntity entity = SmartBeanUtil.copy(addForm, NovelItemEntity.class);
+        entity.setItemStatus(StringUtils.defaultIfBlank(addForm.getItemStatus(), NovelItemStatusEnum.INTACT.getValue()));
+        entity.setDeletedFlag(false);
+        novelItemDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeItem(entity);
+        return ResponseDTO.ok(entity.getItemId());
+    }
+
+    /**
+     * 新增事件，并建立 Project -> Event 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addEvent(NovelEventAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelEventEntity entity = SmartBeanUtil.copy(addForm, NovelEventEntity.class);
+        entity.setDeletedFlag(false);
+        novelEventDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeEvent(entity);
+        return ResponseDTO.ok(entity.getEventId());
+    }
+
+    /**
+     * 新增金手指，并建立 Project -> Cheat 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addCheat(NovelCheatAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelCheatEntity entity = SmartBeanUtil.copy(addForm, NovelCheatEntity.class);
+        entity.setDeletedFlag(false);
+        novelCheatDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeCheat(entity);
+        return ResponseDTO.ok(entity.getCheatId());
+    }
+
+    /**
+     * 新增马甲，并建立 Project -> Alias 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addAlias(NovelAliasAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelAliasEntity entity = SmartBeanUtil.copy(addForm, NovelAliasEntity.class);
+        entity.setRevealed(Boolean.TRUE.equals(addForm.getRevealed()));
+        entity.setDeletedFlag(false);
+        novelAliasDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeAlias(entity);
+        return ResponseDTO.ok(entity.getAliasId());
+    }
+
+    /**
+     * 新增叙事规则，并建立 Project -> NarrativeRule 图关系。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Long> addNarrativeRule(NovelNarrativeRuleAddForm addForm) {
+        NovelProjectEntity project = getProjectOrNull(addForm.getProjectId());
+        if (project == null) {
+            return ResponseDTO.userErrorParam("小说项目不存在");
+        }
+
+        NovelNarrativeRuleEntity entity = SmartBeanUtil.copy(addForm, NovelNarrativeRuleEntity.class);
+        entity.setPriority(addForm.getPriority() == null ? 3 : addForm.getPriority());
+        entity.setDeletedFlag(false);
+        novelNarrativeRuleDao.insert(entity);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeNarrativeRule(entity);
+        return ResponseDTO.ok(entity.getRuleId());
+    }
+
+    /**
+     * 分页查询角色。
+     *
+     * 给管理页用：支持按名称、角色定位、当前状态筛选。
+     */
+    public ResponseDTO<PageResult<NovelCharacterEntity>> queryCharacter(NovelAssetQueryForm queryForm) {
+        Page<NovelCharacterEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelCharacterEntity> wrapper = new LambdaQueryWrapper<NovelCharacterEntity>()
+                .eq(NovelCharacterEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelCharacterEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelCharacterEntity::getCharacterName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelCharacterEntity::getRoleType, queryForm.getType())
+                .eq(StringUtils.isNotBlank(queryForm.getStatus()), NovelCharacterEntity::getCurrentStatus, queryForm.getStatus())
+                .orderByAsc(NovelCharacterEntity::getCharacterId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelCharacterDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询地点。
+     *
+     * 地点没有业务 status，筛选时只看名称和地点类型。
+     */
+    public ResponseDTO<PageResult<NovelLocationEntity>> queryLocation(NovelAssetQueryForm queryForm) {
+        Page<NovelLocationEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelLocationEntity> wrapper = new LambdaQueryWrapper<NovelLocationEntity>()
+                .eq(NovelLocationEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelLocationEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelLocationEntity::getLocationName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelLocationEntity::getLocationType, queryForm.getType())
+                .orderByAsc(NovelLocationEntity::getLocationId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelLocationDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询线索。
+     *
+     * 线索状态会影响写作检索：ACTIVE 更容易进入上下文，DORMANT 通常留给写后校验。
+     */
+    public ResponseDTO<PageResult<NovelClueEntity>> queryClue(NovelAssetQueryForm queryForm) {
+        Page<NovelClueEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelClueEntity> wrapper = new LambdaQueryWrapper<NovelClueEntity>()
+                .eq(NovelClueEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelClueEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelClueEntity::getClueName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelClueEntity::getClueType, queryForm.getType())
+                .eq(StringUtils.isNotBlank(queryForm.getStatus()), NovelClueEntity::getClueStatus, queryForm.getStatus())
+                .orderByAsc(NovelClueEntity::getClueId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelClueDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询卷。
+     *
+     * P0 阶段卷主要用于大纲和章节归属，后续可以接入 Volume -> Chapter 的结构关系。
+     */
+    public ResponseDTO<PageResult<NovelVolumeEntity>> queryVolume(NovelAssetQueryForm queryForm) {
+        Page<NovelVolumeEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelVolumeEntity> wrapper = new LambdaQueryWrapper<NovelVolumeEntity>()
+                .eq(NovelVolumeEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelVolumeEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelVolumeEntity::getVolumeTitle, queryForm.getKeyword())
+                .orderByAsc(NovelVolumeEntity::getVolumeNo);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelVolumeDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询物品。
+     *
+     * 物品状态会影响剧情风险，例如 DESTROYED / LOST 这类高风险变化必须人工确认。
+     */
+    public ResponseDTO<PageResult<NovelItemEntity>> queryItem(NovelAssetQueryForm queryForm) {
+        Page<NovelItemEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelItemEntity> wrapper = new LambdaQueryWrapper<NovelItemEntity>()
+                .eq(NovelItemEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelItemEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelItemEntity::getItemName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelItemEntity::getItemType, queryForm.getType())
+                .eq(StringUtils.isNotBlank(queryForm.getStatus()), NovelItemEntity::getItemStatus, queryForm.getStatus())
+                .orderByAsc(NovelItemEntity::getItemId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelItemDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询事件。
+     *
+     * 事件用于承载“已经发生过的剧情事实”，不是章节正文全文。
+     */
+    public ResponseDTO<PageResult<NovelEventEntity>> queryEvent(NovelAssetQueryForm queryForm) {
+        Page<NovelEventEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelEventEntity> wrapper = new LambdaQueryWrapper<NovelEventEntity>()
+                .eq(NovelEventEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelEventEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelEventEntity::getEventName, queryForm.getKeyword())
+                .orderByAsc(NovelEventEntity::getEventId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelEventDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询金手指。
+     *
+     * 写作检索时会把候选角色拥有的金手指作为关键资产注入 Prompt。
+     */
+    public ResponseDTO<PageResult<NovelCheatEntity>> queryCheat(NovelAssetQueryForm queryForm) {
+        Page<NovelCheatEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelCheatEntity> wrapper = new LambdaQueryWrapper<NovelCheatEntity>()
+                .eq(NovelCheatEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelCheatEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelCheatEntity::getCheatName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelCheatEntity::getCheatType, queryForm.getType())
+                .orderByAsc(NovelCheatEntity::getCheatId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelCheatDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询马甲。
+     *
+     * 马甲是否暴露属于高风险剧情事实，自动抽取时只做建议，确认后再写图谱。
+     */
+    public ResponseDTO<PageResult<NovelAliasEntity>> queryAlias(NovelAssetQueryForm queryForm) {
+        Page<NovelAliasEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelAliasEntity> wrapper = new LambdaQueryWrapper<NovelAliasEntity>()
+                .eq(NovelAliasEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelAliasEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelAliasEntity::getAliasName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelAliasEntity::getAliasType, queryForm.getType())
+                .orderByAsc(NovelAliasEntity::getAliasId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelAliasDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
+     * 分页查询叙事规则。
+     *
+     * 规则按 priority 倒序返回，因为 Prompt 组装时优先级越高越靠前。
+     */
+    public ResponseDTO<PageResult<NovelNarrativeRuleEntity>> queryNarrativeRule(NovelAssetQueryForm queryForm) {
+        Page<NovelNarrativeRuleEntity> page = new Page<>(queryForm.getPageNum(), queryForm.getPageSize(), true);
+        LambdaQueryWrapper<NovelNarrativeRuleEntity> wrapper = new LambdaQueryWrapper<NovelNarrativeRuleEntity>()
+                .eq(NovelNarrativeRuleEntity::getProjectId, queryForm.getProjectId())
+                .eq(NovelNarrativeRuleEntity::getDeletedFlag, false)
+                .like(StringUtils.isNotBlank(queryForm.getKeyword()), NovelNarrativeRuleEntity::getRuleName, queryForm.getKeyword())
+                .eq(StringUtils.isNotBlank(queryForm.getType()), NovelNarrativeRuleEntity::getRuleType, queryForm.getType())
+                .orderByDesc(NovelNarrativeRuleEntity::getPriority)
+                .orderByAsc(NovelNarrativeRuleEntity::getRuleId);
+        return ResponseDTO.ok(SmartPageUtil.convert2PageResult(novelNarrativeRuleDao.selectPage(page, wrapper), page.getRecords()));
+    }
+
+    /**
      * 查询项目下有效角色，供 mock 写作组装上下文。
      */
     public List<NovelCharacterEntity> listCharacters(Long projectId) {
@@ -130,6 +434,59 @@ public class NovelAssetService {
                 .eq(NovelClueEntity::getProjectId, projectId)
                 .eq(NovelClueEntity::getDeletedFlag, false)
                 .orderByAsc(NovelClueEntity::getClueId));
+    }
+
+    /**
+     * 查询项目下有效物品，供 GraphPatch 抽取和写作上下文候选使用。
+     */
+    public List<NovelItemEntity> listItems(Long projectId) {
+        return novelItemDao.selectList(new LambdaQueryWrapper<NovelItemEntity>()
+                .eq(NovelItemEntity::getProjectId, projectId)
+                .eq(NovelItemEntity::getDeletedFlag, false)
+                .orderByAsc(NovelItemEntity::getItemId));
+    }
+
+    /**
+     * 查询项目下有效事件，供 GraphPatch 抽取和事件关系写入使用。
+     */
+    public List<NovelEventEntity> listEvents(Long projectId) {
+        return novelEventDao.selectList(new LambdaQueryWrapper<NovelEventEntity>()
+                .eq(NovelEventEntity::getProjectId, projectId)
+                .eq(NovelEventEntity::getDeletedFlag, false)
+                .orderByAsc(NovelEventEntity::getEventId));
+    }
+
+    /**
+     * 查询项目下有效金手指，供 Prompt 注入和 GraphPatch 审阅使用。
+     */
+    public List<NovelCheatEntity> listCheats(Long projectId) {
+        return novelCheatDao.selectList(new LambdaQueryWrapper<NovelCheatEntity>()
+                .eq(NovelCheatEntity::getProjectId, projectId)
+                .eq(NovelCheatEntity::getDeletedFlag, false)
+                .orderByAsc(NovelCheatEntity::getCheatId));
+    }
+
+    /**
+     * 查询项目下有效马甲，供 Prompt 注入和 GraphPatch 审阅使用。
+     */
+    public List<NovelAliasEntity> listAliases(Long projectId) {
+        return novelAliasDao.selectList(new LambdaQueryWrapper<NovelAliasEntity>()
+                .eq(NovelAliasEntity::getProjectId, projectId)
+                .eq(NovelAliasEntity::getDeletedFlag, false)
+                .orderByAsc(NovelAliasEntity::getAliasId));
+    }
+
+    /**
+     * 查询项目下有效叙事规则。
+     *
+     * 这些规则是写作时“系统提示”的重要来源，尤其是平台红线和字数/文风约束。
+     */
+    public List<NovelNarrativeRuleEntity> listNarrativeRules(Long projectId) {
+        return novelNarrativeRuleDao.selectList(new LambdaQueryWrapper<NovelNarrativeRuleEntity>()
+                .eq(NovelNarrativeRuleEntity::getProjectId, projectId)
+                .eq(NovelNarrativeRuleEntity::getDeletedFlag, false)
+                .orderByDesc(NovelNarrativeRuleEntity::getPriority)
+                .orderByAsc(NovelNarrativeRuleEntity::getRuleId));
     }
 
     /**

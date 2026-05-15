@@ -43,7 +43,31 @@ public class NovelNeo4jInitializer {
             """
             CREATE CONSTRAINT novel_chapter_project_number IF NOT EXISTS
             FOR (c:%s) REQUIRE (c.%s, c.%s) IS UNIQUE
-            """.formatted(label(NovelGraphNodeEnum.CHAPTER), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NUMBER))
+            """.formatted(label(NovelGraphNodeEnum.CHAPTER), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NUMBER)),
+            """
+            CREATE CONSTRAINT novel_volume_project_number IF NOT EXISTS
+            FOR (v:%s) REQUIRE (v.%s, v.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.VOLUME), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NUMBER)),
+            """
+            CREATE CONSTRAINT novel_item_project_name IF NOT EXISTS
+            FOR (i:%s) REQUIRE (i.%s, i.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.ITEM), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NAME)),
+            """
+            CREATE CONSTRAINT novel_event_project_name IF NOT EXISTS
+            FOR (e:%s) REQUIRE (e.%s, e.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.EVENT), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NAME)),
+            """
+            CREATE CONSTRAINT novel_cheat_project_name IF NOT EXISTS
+            FOR (c:%s) REQUIRE (c.%s, c.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.CHEAT), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NAME)),
+            """
+            CREATE CONSTRAINT novel_alias_project_name IF NOT EXISTS
+            FOR (a:%s) REQUIRE (a.%s, a.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.ALIAS), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NAME)),
+            """
+            CREATE CONSTRAINT novel_rule_project_name IF NOT EXISTS
+            FOR (r:%s) REQUIRE (r.%s, r.%s) IS UNIQUE
+            """.formatted(label(NovelGraphNodeEnum.NARRATIVE_RULE), property(NovelGraphPropertyEnum.PROJECT_ID), property(NovelGraphPropertyEnum.NAME))
     );
 
     @Resource

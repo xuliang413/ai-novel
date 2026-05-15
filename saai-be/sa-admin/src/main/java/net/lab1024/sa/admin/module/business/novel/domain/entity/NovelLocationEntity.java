@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说地点实体。
+ *
+ * 地点是场景检索的基础，角色当前位置和章节出场关系都会指向它。
  */
 @Data
 @TableName("t_novel_location")
@@ -45,7 +47,13 @@ public class NovelLocationEntity implements Serializable {
      */
     private Boolean deletedFlag;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

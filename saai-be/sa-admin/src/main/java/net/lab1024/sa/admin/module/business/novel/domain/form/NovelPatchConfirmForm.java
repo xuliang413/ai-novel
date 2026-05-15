@@ -7,10 +7,15 @@ import java.util.List;
 
 /**
  * GraphPatch 确认表单。
+ *
+ * 用户在“图谱变更确认页”提交。只有这一步之后，变更才真正写进 Neo4j。
  */
 @Data
 public class NovelPatchConfirmForm {
 
+    /**
+     * 本次写作会话 ID。
+     */
     @NotNull(message = "生成会话 ID 不能为空")
     private Long sessionId;
 

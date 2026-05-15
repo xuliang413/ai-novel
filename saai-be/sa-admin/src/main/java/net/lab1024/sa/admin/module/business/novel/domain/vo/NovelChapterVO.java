@@ -6,6 +6,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说章节返回对象。
+ *
+ * 前端展示章节列表、正文审阅和发布结果时都用它。
  */
 @Data
 public class NovelChapterVO {
@@ -50,7 +52,13 @@ public class NovelChapterVO {
      */
     private Long generationSessionId;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说章节实体。
+ *
+ * 正文主存储在 MySQL，Neo4j 里只同步章节摘要和关系，避免图谱里塞大段正文。
  */
 @Data
 @TableName("t_novel_chapter")
@@ -55,7 +57,13 @@ public class NovelChapterEntity implements Serializable {
      */
     private Long generationSessionId;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

@@ -58,6 +58,98 @@ CREATE TABLE IF NOT EXISTS `t_novel_clue` (
   KEY `idx_clue_status` (`clue_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说线索';
 
+CREATE TABLE IF NOT EXISTS `t_novel_volume` (
+  `volume_id` bigint NOT NULL AUTO_INCREMENT COMMENT '卷ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `volume_no` int NOT NULL COMMENT '卷序号',
+  `volume_title` varchar(200) NOT NULL COMMENT '卷标题',
+  `summary` text COMMENT '卷概要',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`volume_id`),
+  UNIQUE KEY `uk_project_volume_no` (`project_id`, `volume_no`),
+  KEY `idx_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说卷';
+
+CREATE TABLE IF NOT EXISTS `t_novel_item` (
+  `item_id` bigint NOT NULL AUTO_INCREMENT COMMENT '物品ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `item_name` varchar(100) NOT NULL COMMENT '物品名称',
+  `item_type` varchar(50) DEFAULT NULL COMMENT '物品类型',
+  `item_status` varchar(50) NOT NULL DEFAULT 'INTACT' COMMENT '物品状态',
+  `summary` text COMMENT '物品简介',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`item_id`),
+  UNIQUE KEY `uk_project_item_name` (`project_id`, `item_name`),
+  KEY `idx_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说物品';
+
+CREATE TABLE IF NOT EXISTS `t_novel_event` (
+  `event_id` bigint NOT NULL AUTO_INCREMENT COMMENT '事件ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `event_name` varchar(100) NOT NULL COMMENT '事件名称',
+  `summary` text COMMENT '事件简介',
+  `chapter_occurred` int DEFAULT NULL COMMENT '事件发生章节',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`event_id`),
+  UNIQUE KEY `uk_project_event_name` (`project_id`, `event_name`),
+  KEY `idx_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说事件';
+
+CREATE TABLE IF NOT EXISTS `t_novel_cheat` (
+  `cheat_id` bigint NOT NULL AUTO_INCREMENT COMMENT '金手指ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `cheat_name` varchar(100) NOT NULL COMMENT '金手指名称',
+  `cheat_type` varchar(50) DEFAULT NULL COMMENT '金手指类型',
+  `summary` text COMMENT '金手指简介',
+  `origin` varchar(500) DEFAULT NULL COMMENT '来源',
+  `limitation` varchar(500) DEFAULT NULL COMMENT '限制或副作用',
+  `evolution` varchar(500) DEFAULT NULL COMMENT '升级路径',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`cheat_id`),
+  UNIQUE KEY `uk_project_cheat_name` (`project_id`, `cheat_name`),
+  KEY `idx_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说金手指';
+
+CREATE TABLE IF NOT EXISTS `t_novel_alias` (
+  `alias_id` bigint NOT NULL AUTO_INCREMENT COMMENT '马甲ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `alias_name` varchar(100) NOT NULL COMMENT '马甲名称',
+  `alias_type` varchar(50) DEFAULT NULL COMMENT '马甲类型',
+  `alias_context` varchar(200) NOT NULL COMMENT '使用场景',
+  `summary` text COMMENT '马甲简介',
+  `revealed` tinyint(1) NOT NULL DEFAULT 0 COMMENT '是否已识破',
+  `revealed_to` varchar(500) DEFAULT NULL COMMENT '识破角色列表',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`alias_id`),
+  UNIQUE KEY `uk_project_alias_name` (`project_id`, `alias_name`),
+  KEY `idx_project_id` (`project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说马甲';
+
+CREATE TABLE IF NOT EXISTS `t_novel_narrative_rule` (
+  `rule_id` bigint NOT NULL AUTO_INCREMENT COMMENT '叙事规则ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `rule_name` varchar(100) NOT NULL COMMENT '规则名称',
+  `rule_type` varchar(50) NOT NULL COMMENT '规则类型',
+  `rule_value` varchar(2000) NOT NULL COMMENT '规则内容',
+  `priority` int NOT NULL DEFAULT 3 COMMENT '优先级，1-5，5最高',
+  `deleted_flag` tinyint(1) NOT NULL DEFAULT 0 COMMENT '逻辑删除标识',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`rule_id`),
+  UNIQUE KEY `uk_project_rule_name` (`project_id`, `rule_name`),
+  KEY `idx_project_type` (`project_id`, `rule_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说叙事规则';
+
 CREATE TABLE IF NOT EXISTS `t_novel_chapter` (
   `chapter_id` bigint NOT NULL AUTO_INCREMENT COMMENT '章节ID',
   `project_id` bigint NOT NULL COMMENT '项目ID',
@@ -73,6 +165,34 @@ CREATE TABLE IF NOT EXISTS `t_novel_chapter` (
   UNIQUE KEY `uk_project_chapter_no` (`project_id`, `chapter_no`),
   KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说章节';
+
+CREATE TABLE IF NOT EXISTS `t_chapter_outline` (
+  `outline_id` bigint NOT NULL AUTO_INCREMENT COMMENT '章节细纲ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `chapter_no` int NOT NULL COMMENT '章节序号',
+  `scenes_json` mediumtext COMMENT '场景节拍 JSON',
+  `summary` text COMMENT '细纲摘要',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`outline_id`),
+  UNIQUE KEY `uk_project_chapter_no` (`project_id`, `chapter_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说章节细纲';
+
+CREATE TABLE IF NOT EXISTS `t_writing_log` (
+  `writing_log_id` bigint NOT NULL AUTO_INCREMENT COMMENT '写作日志ID',
+  `project_id` bigint NOT NULL COMMENT '项目ID',
+  `chapter_id` bigint DEFAULT NULL COMMENT '章节ID',
+  `chapter_no` int DEFAULT NULL COMMENT '章节序号',
+  `word_count` int DEFAULT NULL COMMENT '字数',
+  `token_used` int DEFAULT NULL COMMENT 'Token消耗估算',
+  `success` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否成功',
+  `provider` varchar(30) DEFAULT NULL COMMENT '生成供应商',
+  `create_user_id` bigint DEFAULT NULL COMMENT '创建人用户ID',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`writing_log_id`),
+  KEY `idx_project_chapter` (`project_id`, `chapter_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI小说写作日志';
 
 CREATE TABLE IF NOT EXISTS `t_user_api_key` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',

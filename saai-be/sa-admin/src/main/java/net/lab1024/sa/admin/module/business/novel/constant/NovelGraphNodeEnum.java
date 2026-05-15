@@ -6,8 +6,7 @@ import net.lab1024.sa.base.common.enumeration.BaseEnum;
 /**
  * 小说知识图谱节点类型枚举。
  *
- * 包含项目、角色、地点、线索、章节五类节点，
- * 后续新增 Volume、Event、Item 等节点时在这里统一扩展，保证标签名不散落各处。
+ * 覆盖技术方案 §4.2 定义的 11 类业务节点，保证标签名不散落各处。
  */
 @AllArgsConstructor
 @Getter
@@ -17,6 +16,16 @@ public enum NovelGraphNodeEnum implements BaseEnum {
      * 项目节点，对应一本小说或一个创作项目。
      */
     PROJECT("Project", "项目节点"),
+
+    /**
+     * 卷节点。
+     */
+    VOLUME("Volume", "卷节点"),
+
+    /**
+     * 章节节点，只保存摘要和状态，不保存正文。
+     */
+    CHAPTER("Chapter", "章节节点"),
 
     /**
      * 角色节点。
@@ -34,12 +43,38 @@ public enum NovelGraphNodeEnum implements BaseEnum {
     CLUE("Clue", "线索节点"),
 
     /**
-     * 章节节点，只保存摘要和状态，不保存正文。
+     * 物品节点。
      */
-    CHAPTER("Chapter", "章节节点");
+    ITEM("Item", "物品节点"),
 
+    /**
+     * 事件节点。
+     */
+    EVENT("Event", "事件节点"),
+
+    /**
+     * 金手指节点。
+     */
+    CHEAT("Cheat", "金手指节点"),
+
+    /**
+     * 马甲节点。
+     */
+    ALIAS("Alias", "马甲节点"),
+
+    /**
+     * 叙事规则节点。
+     */
+    NARRATIVE_RULE("NarrativeRule", "叙事规则节点");
+
+    /**
+     * Neo4j 节点标签名。
+     */
     private final String value;
 
+    /**
+     * 给人看的中文说明。
+     */
     private final String desc;
 
     /**

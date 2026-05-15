@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说线索实体。
+ *
+ * 线索状态会被写作流程频繁读取，用来判断本章该推进什么、是否重复揭示。
  */
 @Data
 @TableName("t_novel_clue")
@@ -50,7 +52,13 @@ public class NovelClueEntity implements Serializable {
      */
     private Boolean deletedFlag;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

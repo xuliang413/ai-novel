@@ -66,9 +66,11 @@ public class NovelLLMService {
                                              String provider) {
         OpenAiChatModel model = resolveModel(provider);
         if (model == null) {
+            // 上层会把 null 视为“当前模型不可用”，然后自动降级成 MOCK。
             return null;
         }
 
+        // 真正发给模型的上下文来自 Neo4j 检索结果，不直接拿 MySQL 全量设定硬塞。
         NovelRetrieveService.RetrievalResult retrieved = retrieveService.retrieve(project, intent);
         String systemPrompt = buildSystemPrompt(project, intent);
         String userPrompt = buildUserPrompt(project, intent, retrieved);
@@ -84,6 +86,7 @@ public class NovelLLMService {
             log.info("LLM response length: {}", StringUtils.length(response));
             return parseChapterResponse(response, project, intent);
         } catch (Exception e) {
+            // 不把异常往外抛，是为了让 NovelWriteService 能统一降级，用户还能继续审阅流程。
             log.error("LLM generation failed: provider={}, error={}", provider, e.getMessage());
             return new LLMChapterResult(null, null, "【生成失败】" + e.getMessage());
         }
@@ -137,11 +140,13 @@ public class NovelLLMService {
                                        java.util.function.Consumer<String> onError) {
         OpenAiStreamingChatModel model = resolveStreamingModel(provider);
         if (model == null) {
+            // 流式没有可用模型时直接回调错误，不在这里做 mock；mock 在 NovelWriteService 里统一处理。
             onError.accept("未找到可用的 LLM Provider: " + provider);
             return;
         }
 
         String systemPrompt = buildSystemPrompt(project, intent);
+        // 流式和非流式使用同一套检索逻辑，避免两种生成方式写出来的上下文不一致。
         NovelRetrieveService.RetrievalResult retrieved = retrieveService.retrieve(project, intent);
         String userPrompt = buildUserPrompt(project, intent, retrieved);
 
@@ -155,12 +160,14 @@ public class NovelLLMService {
                 new StreamingResponseHandler<AiMessage>() {
                     @Override
                     public void onNext(String token) {
+                        // fullResponse 是为了最后解析完整 JSON；onToken 是为了前端实时显示。
                         fullResponse.append(token);
                         onToken.accept(token);
                     }
 
                     @Override
                     public void onComplete(Response<AiMessage> response) {
+                        // 模型流结束后才把整段 JSON 解析成 title/summary/content。
                         LLMChapterResult result = parseChapterResponse(
                                 fullResponse.toString(), project, intent);
                         onComplete.accept(result);
@@ -182,6 +189,7 @@ public class NovelLLMService {
      */
     private String buildSystemPrompt(NovelProjectEntity project, ChapterIntentModel intent) {
         StringBuilder sb = new StringBuilder();
+        // system prompt 放“身份和硬规则”，user prompt 放“这一章具体写什么”。
         sb.append("你是一位专业的小说作家，擅长");
         sb.append(StringUtils.defaultIfBlank(project.getGenre(), "文学"));
         sb.append("类写作。\n\n");
@@ -193,6 +201,7 @@ public class NovelLLMService {
         sb.append("4. 章末为下一章留下悬念或推进入口\n\n");
 
         sb.append("## 返回格式\n");
+        // 强制 JSON 是为了让后端能稳定拆 title/summary/content；解析失败仍有兜底。
         sb.append("请严格按照以下 JSON 格式返回，不要包含其他内容：\n");
         sb.append("{\"title\":\"第N章：章节标题\",\"summary\":\"本章摘要（100字内）\",\"content\":\"章节正文\"}\n");
         sb.append("注意：content 字段为 Markdown 格式的正文，不要将 JSON 嵌套在 content 内。");
@@ -224,7 +233,17 @@ public class NovelLLMService {
         sb.append("本章 POV：").append(intent.getPov()).append("\n");
         sb.append("本章目标：").append(intent.getChapterGoal()).append("\n\n");
 
+        // 叙事规则先于剧情上下文，让模型先知道边界，再去发挥。
+        if (CollectionUtils.isNotEmpty(r.narrativeRules)) {
+            sb.append("## 叙事规则\n");
+            for (String rule : r.narrativeRules) {
+                sb.append("- ").append(rule).append("\n");
+            }
+            sb.append("\n");
+        }
+
         if (StringUtils.isNotBlank(r.previousChapterSummary)) {
+            // 前一章摘要是续写最重要的钩子，先给它，减少剧情断层。
             sb.append("## 前一章摘要\n").append(r.previousChapterSummary).append("\n\n");
         }
 
@@ -232,6 +251,7 @@ public class NovelLLMService {
             sb.append("## 候选角色\n");
             for (Map.Entry<String, Map<String, Object>> e : r.characterStateCards.entrySet()) {
                 Map<String, Object> card = e.getValue();
+                // 状态卡压成短行，模型能快速看到“身份 / 状态 / 情绪 / 目标 / 位置”。
                 sb.append("- ").append(e.getKey()).append(" [").append(toString(card.get("role")))
                         .append("·").append(toString(card.get("status")))
                         .append("·").append(toString(card.get("emotion"))).append("]");
@@ -254,10 +274,20 @@ public class NovelLLMService {
             sb.append("\n");
         }
 
+        // 关键资产会影响剧情可行性，比如主角是否持有某物、是否有金手指。
+        if (CollectionUtils.isNotEmpty(r.assetHints)) {
+            sb.append("## 关键资产（金手指 / 马甲 / 持有物）\n");
+            for (String asset : r.assetHints) {
+                sb.append("- ").append(asset).append("\n");
+            }
+            sb.append("\n");
+        }
+
         if (!r.targetClueProgress.isEmpty()) {
             sb.append("## 目标线索\n");
             for (Map.Entry<String, Map<String, Object>> e : r.targetClueProgress.entrySet()) {
                 Map<String, Object> card = e.getValue();
+                // 线索摘要告诉模型“这条线目前推进到哪”，防止一章内重复揭示旧信息。
                 sb.append("- ").append(e.getKey()).append(" [").append(toString(card.get("status")))
                         .append("] ").append(toString(card.get("summary"))).append("\n");
             }
@@ -281,6 +311,7 @@ public class NovelLLMService {
         String prompt = sb.toString();
         int estimatedTokens = prompt.length() / 2;
         if (estimatedTokens > HARD_TRUNCATION) {
+            // 先做硬截断保护接口稳定。后续如果上下文变复杂，再改成按优先级裁剪。
             log.warn("Truncated token from {} to {}", estimatedTokens, HARD_TRUNCATION);
             r.truncatedItems = Math.max(1, (estimatedTokens - HARD_TRUNCATION) / 2);
             prompt = prompt.substring(0, HARD_TRUNCATION * 2);
@@ -308,6 +339,7 @@ public class NovelLLMService {
     LLMChapterResult parseChapterResponse(String response, NovelProjectEntity project, ChapterIntentModel intent) {
         String jsonStr = response.trim();
         if (!jsonStr.startsWith("{")) {
+            // 容忍模型在 JSON 前面加“好的，下面是正文”之类的话。
             int idx = jsonStr.indexOf("{");
             if (idx > 0) {
                 jsonStr = jsonStr.substring(idx);
@@ -315,6 +347,7 @@ public class NovelLLMService {
         }
         int lastBrace = jsonStr.lastIndexOf("}");
         if (lastBrace > 0 && lastBrace < jsonStr.length() - 1) {
+            // 容忍 JSON 后面多出解释文字，只保留最外层对象。
             jsonStr = jsonStr.substring(0, lastBrace + 1);
         }
 
@@ -325,13 +358,16 @@ public class NovelLLMService {
             String content = json.getString("content");
 
             if (StringUtils.isBlank(title)) {
+                // 标题缺失不影响正文审阅，给一个稳定默认值即可。
                 title = "第" + intent.getChapterNo() + "章";
             }
             if (StringUtils.isBlank(summary)) {
+                // 摘要缺失时从正文截一段，后续用户也可以在审阅页改。
                 summary = StringUtils.abbreviate(StringUtils.defaultString(content), 200);
             }
             return new LLMChapterResult(title, summary, content);
         } catch (Exception e) {
+            // 解析失败时不丢内容：整段响应当正文，至少让用户能看到模型写了什么。
             log.warn("Failed to parse LLM JSON response, using raw text. error={}", e.getMessage());
             String title = "第" + intent.getChapterNo() + "章";
             return new LLMChapterResult(title, StringUtils.abbreviate(response, 200), response);
@@ -360,6 +396,7 @@ public class NovelLLMService {
                                                    String provider) {
         OpenAiChatModel model = resolveModel(provider);
         if (model == null) {
+            // 抽取不是强依赖，没模型时让外层走规则兜底。
             return null;
         }
 
@@ -396,6 +433,7 @@ public class NovelLLMService {
             log.info("LLM extract graph patch response length: {}", StringUtils.length(response));
             return parseExtractionResponse(response, project, chapter, characters, locations, clues);
         } catch (Exception e) {
+            // 这里失败不影响正文保存，只是回退到 buildGraphPatch 的保守变更单。
             log.error("LLM extraction failed, fallback to mock. error={}", e.getMessage());
             return null;
         }
@@ -407,6 +445,7 @@ public class NovelLLMService {
                                           List<NovelLocationEntity> locations,
                                           List<NovelClueEntity> clues) {
         StringBuilder sb = new StringBuilder();
+        // 抽取 Prompt 故意只给“已有实体清单 + 正文前 3000 字”，避免 AI 自己发明大量新实体。
         sb.append("## 作品信息\n");
         sb.append("作品：").append(project.getProjectName()).append("\n");
         sb.append("类型：").append(StringUtils.defaultIfBlank(project.getGenre(), "未知")).append("\n");
@@ -437,6 +476,7 @@ public class NovelLLMService {
         sb.append("\n");
 
         sb.append("## 本章正文（第").append(chapter.getChapterNo()).append("章）\n");
+        // 只取前 3000 字，够判断大多数出场/线索推进，也能控制调用成本。
         sb.append(StringUtils.abbreviate(StringUtils.defaultString(chapter.getContent()), 3000));
         sb.append("\n\n");
 
@@ -462,6 +502,7 @@ public class NovelLLMService {
                                                   List<NovelClueEntity> clues) {
         String jsonStr = response.trim();
         if (!jsonStr.startsWith("{")) {
+            // 和章节生成一样，抽取结果也要容忍模型在 JSON 外说废话。
             int idx = jsonStr.indexOf("{");
             if (idx > 0) {
                 jsonStr = jsonStr.substring(idx);
@@ -473,6 +514,7 @@ public class NovelLLMService {
         }
 
         NovelGraphPatchModel patch = new NovelGraphPatchModel();
+        // 先创建空 Patch，再解析 operations；即使 operations 解析失败，也能保留章节摘要更新。
         patch.setPatchId(java.util.UUID.randomUUID().toString());
         patch.setOperationBatchId(java.util.UUID.randomUUID().toString());
         patch.setProjectId(project.getProjectId());
@@ -485,6 +527,7 @@ public class NovelLLMService {
             String chapterSummary = json.getString("chapterSummary");
 
             NovelGraphPatchOperationModel summaryOp = new NovelGraphPatchOperationModel();
+            // 发布章节这条操作是固定保底项，不能完全依赖 AI 是否返回。
             summaryOp.setOperationId(java.util.UUID.randomUUID().toString());
             summaryOp.setOperationType("UPDATE_CHAPTER_SUMMARY");
             summaryOp.setTargetType("CHAPTER");
@@ -511,11 +554,13 @@ public class NovelLLMService {
                     String targetType = StringUtils.defaultIfBlank(opJson.getString("targetType"), "");
 
                     if ("MARK_APPEARANCE".equals(opType)) {
+                        // 出场操作要先把 AI 返回的名字匹配到已知角色/地点，再进入可执行队列。
                         NovelGraphPatchOperationModel op = buildAppearanceOp(patch, targetType, targetName, confidence, evidence, characters, locations);
                         if (op != null) {
                             patch.getOperations().add(op);
                         }
                     } else if ("ADVANCE_CLUE".equals(opType)) {
+                        // 线索推进要带 before/after，后续撤销和冲突检查都要靠它。
                         NovelGraphPatchOperationModel op = buildClueOp(patch, targetName, opJson, confidence, evidence, clues);
                         if (op != null) {
                             patch.getOperations().add(op);
@@ -527,7 +572,7 @@ public class NovelLLMService {
             log.warn("Failed to parse LLM extraction JSON. error={}", e.getMessage());
         }
 
-        if (patch.getOperations().stream().anyMatch(op -> "LOW".equals(op.getValidationStatus()))) {
+        if (patch.getOperations().stream().anyMatch(op -> "LOW_CONFIDENCE".equals(op.getValidationStatus()))) {
             patch.getWarnings().add("存在低置信操作，请人工确认。");
         }
 
@@ -547,6 +592,7 @@ public class NovelLLMService {
                                                              List<NovelCharacterEntity> characters,
                                                              List<NovelLocationEntity> locations) {
         if (StringUtils.isBlank(targetType)) {
+            // 模型有时只给名字不给类型，这里用已知名单做一次保守推断。
             targetType = guessEntityType(targetName, characters, locations);
         }
 
@@ -566,6 +612,7 @@ public class NovelLLMService {
                 }
             }
             if (targetId == null) {
+                // 没匹配上的名字仍然保留给前端审阅，但执行时会被 GraphService 拦掉或跳过。
                 targetType = "CHARACTER";
             }
         }
@@ -577,6 +624,7 @@ public class NovelLLMService {
         op.setTargetId(targetId);
         op.setTargetName(targetName);
         op.setConfidence(confidence);
+        // LOW 不是绝对不能执行，但默认不勾选，把决定权交给审阅人。
         op.setValidationStatus("LOW".equals(confidence) ? "LOW_CONFIDENCE" : "READY");
         op.setSelected(!"LOW".equals(confidence));
         op.setEvidence(evidence);
@@ -595,6 +643,7 @@ public class NovelLLMService {
         String beforeSummary = "";
         for (NovelClueEntity cl : clues) {
             if (cl.getClueName().equals(targetName)) {
+                // 匹配到旧线索后，把旧状态带进 patch，撤销和冲突校验都需要它。
                 targetId = cl.getClueId();
                 beforeStatus = cl.getClueStatus();
                 beforeSummary = cl.getSummary();
@@ -616,6 +665,7 @@ public class NovelLLMService {
         op.setBeforeSummary(beforeSummary);
         op.setAfterSummary(afterSummary);
         op.setConfidence(confidence);
+        // 线索推进只要被模型抽出来，默认给 READY；具体是否执行仍由用户勾选和后端校验决定。
         op.setValidationStatus("READY");
         op.setSelected(true);
         op.setEvidence(evidence);
@@ -624,6 +674,7 @@ public class NovelLLMService {
     }
 
     private String guessEntityType(String name, List<NovelCharacterEntity> characters, List<NovelLocationEntity> locations) {
+        // 同名时角色优先，因为“人名被识别成地点”对剧情状态的影响通常更糟。
         for (NovelCharacterEntity c : characters) {
             if (c.getCharacterName().equals(name)) return "CHARACTER";
         }

@@ -65,6 +65,7 @@ public class NovelRetrieveService {
         result.pov = pov;
 
         try (Session session = novelNeo4jDriver.session()) {
+            result.narrativeRules = fetchNarrativeRules(session, project.getProjectId());
             result.previousChapterSummary = fetchPreviousChapterSummary(session, project.getProjectId(), intent.getChapterNo());
             result.chapterSummaries = fetchRecentChapterSummaries(session, project.getProjectId(), intent.getChapterNo(), 3);
 
@@ -76,6 +77,7 @@ public class NovelRetrieveService {
             }
 
             result.keyRelations = fetchKeyRelations(session, project.getProjectId(), povCandidates);
+            result.assetHints = fetchCharacterAssets(session, project.getProjectId(), povCandidates);
 
             for (ChapterIntentCandidateModel cl : intent.getTargetClues()) {
                 Map<String, Object> card = fetchClueProgress(session, project.getProjectId(), cl.getName());
@@ -100,6 +102,30 @@ public class NovelRetrieveService {
         }
 
         return result;
+    }
+
+    /**
+     * 读取项目叙事规则。
+     *
+     * 这些不是剧情事实，而是“写作时必须遵守的规矩”，比如平台红线、字数、文风。
+     * 它们按优先级放进 Prompt，避免模型写着写着跑偏。
+     */
+    private List<String> fetchNarrativeRules(Session session, Long projectId) {
+        List<String> rules = new ArrayList<>();
+        var result = session.run(
+                "MATCH (:Project {projectId: $projectId})-[:HAS_RULE {projectId: $projectId}]->(r:NarrativeRule {projectId: $projectId}) " +
+                        "WHERE coalesce(r.archived, false) = false " +
+                        "RETURN r.type AS type, r.value AS value, r.priority AS priority ORDER BY r.priority DESC LIMIT 10",
+                Map.of("projectId", projectId));
+        while (result.hasNext()) {
+            Record rec = result.next();
+            String type = rec.get("type", "RULE");
+            String value = rec.get("value", "");
+            if (StringUtils.isNotBlank(value)) {
+                rules.add(type + "：" + value);
+            }
+        }
+        return rules;
     }
 
     private String fetchPreviousChapterSummary(Session session, Long projectId, Integer chapterNo) {
@@ -177,6 +203,32 @@ public class NovelRetrieveService {
         return new ArrayList<>(rels);
     }
 
+    /**
+     * 读取候选角色身上的关键资产。
+     *
+     * 包括金手指、马甲、持有物。它们经常决定角色能不能做到某件事，
+     * 所以比普通背景信息更值得进 Prompt。
+     */
+    private List<String> fetchCharacterAssets(Session session, Long projectId, List<String> characterNames) {
+        Set<String> assets = new LinkedHashSet<>();
+        if (characterNames.isEmpty()) return new ArrayList<>(assets);
+        var result = session.run(
+                "MATCH (c:Character {projectId: $projectId})-[r:HAS_CHEAT|HAS_ALIAS|POSSESSES {projectId: $projectId}]->(a {projectId: $projectId}) " +
+                        "WHERE c.name IN $names AND coalesce(a.archived, false) = false " +
+                        "RETURN c.name AS characterName, type(r) AS rel, labels(a)[0] AS label, a.name AS name, a.summary AS summary LIMIT 20",
+                Map.of("projectId", projectId, "names", characterNames));
+        while (result.hasNext()) {
+            Record rec = result.next();
+            String characterName = rec.get("characterName", "?");
+            String rel = rec.get("rel", "HAS");
+            String label = rec.get("label", "Asset");
+            String name = rec.get("name", "?");
+            String summary = StringUtils.abbreviate(rec.get("summary", ""), 60);
+            assets.add(characterName + " -[" + rel + "]-> " + label + "「" + name + "」" + (StringUtils.isBlank(summary) ? "" : "：" + summary));
+        }
+        return new ArrayList<>(assets);
+    }
+
     private Map<String, Object> fetchClueProgress(Session session, Long projectId, String name) {
         var result = session.run(
                 "MATCH (cl:Clue {projectId: $projectId, name: $name}) " +
@@ -227,10 +279,12 @@ public class NovelRetrieveService {
         public Long projectId;
         public Integer chapterNo;
         public String pov;
+        public List<String> narrativeRules = new ArrayList<>();
         public String previousChapterSummary;
         public List<String> chapterSummaries = new ArrayList<>();
         public Map<String, Map<String, Object>> characterStateCards = new LinkedHashMap<>();
         public List<String> keyRelations = new ArrayList<>();
+        public List<String> assetHints = new ArrayList<>();
         public Map<String, Map<String, Object>> targetClueProgress = new LinkedHashMap<>();
         public Map<String, Map<String, Object>> locationCards = new LinkedHashMap<>();
         public Map<String, Object> povCurrentLocation;

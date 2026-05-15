@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 小说项目实体。
+ *
+ * 一本小说的根记录。项目节点是 MySQL 和 Neo4j 之间最重要的隔离边界。
  */
 @Data
 @TableName("t_novel_project")
@@ -60,7 +62,13 @@ public class NovelProjectEntity implements Serializable {
      */
     private Boolean deletedFlag;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
 
 /**
  * 用户 AI Key 表。存储 DeepSeek 和通义千问的 Key，加密保存。
+ *
+ * 注意它是用户级，不是项目级；同一个用户写不同小说共用一套模型 Key。
  */
 @Data
 @TableName("t_user_api_key")
@@ -35,7 +37,13 @@ public class UserApiKeyEntity implements Serializable {
      */
     private String qwenKey;
 
+    /**
+     * 更新时间。
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间。
+     */
     private LocalDateTime createTime;
 }

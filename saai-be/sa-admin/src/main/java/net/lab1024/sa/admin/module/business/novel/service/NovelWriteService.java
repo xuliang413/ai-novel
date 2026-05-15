@@ -11,13 +11,19 @@ import net.lab1024.sa.admin.module.business.novel.constant.NovelGenerationStatus
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphChangeStatusEnum;
 import net.lab1024.sa.admin.module.business.novel.dao.ChapterGenerationSessionDao;
 import net.lab1024.sa.admin.module.business.novel.dao.GraphChangeLogDao;
+import net.lab1024.sa.admin.module.business.novel.dao.WritingLogDao;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.ChapterGenerationSessionEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.GraphChangeLogEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelChapterEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCharacterEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelClueEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelAliasEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCheatEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelEventEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelItemEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelLocationEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelProjectEntity;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.WritingLogEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelContentReviewPassForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchBackForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchConfirmForm;
@@ -99,6 +105,9 @@ public class NovelWriteService {
     private GraphChangeLogDao graphChangeLogDao;
 
     @Resource
+    private WritingLogDao writingLogDao;
+
+    @Resource
     private NovelLLMService novelLLMService;
 
     @Resource
@@ -133,6 +142,7 @@ public class NovelWriteService {
         ChapterIntentModel intent = buildChapterIntent(form, project, chapterNo, characters, locations, clues);
         ContextPreviewModel contextPreview = buildContextPreview(project, chapterNo, intent, characters, locations, clues);
 
+        // provider 是本次写作的“发动机”：优先真实模型，拿不到可用 Key 就走 MOCK，保证功能链路不中断。
         String provider = resolveAvailableProvider();
         String title;
         String summary;
@@ -140,6 +150,7 @@ public class NovelWriteService {
         String promptSnapshot;
 
         if ("DEEPSEEK".equals(provider) || "TONGYI".equals(provider)) {
+            // promptSnapshot 不保存完整大段提示词，只保留能排查“谁、哪章、哪个模型”的轻量线索。
             promptSnapshot = buildPromptSnapshot(project, intent, contextPreview, provider);
             NovelLLMService.LLMChapterResult result = novelLLMService.generateChapter(project, intent, contextPreview, provider);
             if (result != null && StringUtils.isNotBlank(result.content()) && StringUtils.isNotBlank(result.title())) {
@@ -147,6 +158,7 @@ public class NovelWriteService {
                 summary = result.summary();
                 content = result.content();
             } else {
+                // AI 返回空内容时不让用户卡死在生成页，直接降级成可审阅草稿。
                 provider = NovelGenerationProviderEnum.MOCK.getValue();
                 title = "第" + chapterNo + "章：" + project.getProjectName();
                 summary = "第" + chapterNo + "章待审阅草稿（LLM 调用失败，回退降级）。";
@@ -154,6 +166,7 @@ public class NovelWriteService {
                 promptSnapshot = "/write " + chapterNo + " (fallback to mock)";
             }
         } else {
+            // 没有任何可用 Key 时仍然走完整状态机，方便前端和后续 GraphPatch 流程一起联调。
             provider = NovelGenerationProviderEnum.MOCK.getValue();
             title = "第" + chapterNo + "章：" + project.getProjectName();
             summary = "第" + chapterNo + "章待审阅草稿（未配置 AI Key，使用降级模式）。";
@@ -161,8 +174,10 @@ public class NovelWriteService {
             promptSnapshot = "/write " + chapterNo;
         }
 
+        // 质检不是最终裁判，只是提前把明显风险告诉前端，比如 POV 没出现、字数太短。
         ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
 
+        // session 是写作状态机的核心记录：后面恢复、返回上一步、确认图谱、撤销都靠它串起来。
         ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
         session.setProjectId(form.getProjectId());
         session.setChapterNo(chapterNo);
@@ -176,10 +191,12 @@ public class NovelWriteService {
         session.setCreateUserId(AdminRequestUtil.getRequestUserId());
         generationSessionDao.insert(session);
 
+        // 章节先以 DRAFT 落库，只有 GraphPatch 确认成功后才会变 PUBLISHED。
         NovelChapterEntity chapter = saveDraftChapter(form.getProjectId(), chapterNo, title, summary, content, session.getSessionId());
         session.setChapterId(chapter.getChapterId());
         generationSessionDao.updateById(session);
 
+        // MySQL 是正文主存储，Neo4j 是关系检索层；这里同步基础节点，后面写作检索才能查到。
         novelGraphService.mergeProject(project);
         novelGraphService.mergeChapter(chapter);
 
@@ -221,6 +238,7 @@ public class NovelWriteService {
 
         String provider = resolveAvailableProvider();
         if (NovelGenerationProviderEnum.MOCK.getValue().equals(provider)) {
+            // 流式接口也要能无 Key 运行：把整段 mock 内容一次性推给前端，再走完成回调。
             String title = "第" + chapterNo + "章：" + project.getProjectName();
             String content = buildMockContent(project, chapterNo, characters, locations, clues);
             String summary = "第" + chapterNo + "章待审阅草稿（未配置 AI Key，使用降级模式）。";
@@ -236,6 +254,7 @@ public class NovelWriteService {
                 result -> {
                     try {
                         if (result == null || StringUtils.isBlank(result.content()) || StringUtils.isBlank(result.title())) {
+                            // 流式模型完成了但没给出完整 JSON 时，仍然保存一份 mock 草稿，避免会话悬空。
                             String fallbackTitle = "第" + chapterNo + "章：" + project.getProjectName();
                             String fallbackContent = buildMockContent(project, chapterNo, characters, locations, clues);
                             String fallbackSummary = "第" + chapterNo + "章待审阅草稿（LLM 调用失败，回退降级）。";
@@ -262,6 +281,7 @@ public class NovelWriteService {
                                                  String title, String summary, String content,
                                                  ChapterIntentModel intent, ContextPreviewModel contextPreview,
                                                  NovelProjectEntity project) {
+        // 流式生成结束后统一走这里保存，和普通 start 保持同一套 session / chapter 结构。
         ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
 
         ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
@@ -316,9 +336,11 @@ public class NovelWriteService {
         }
 
         if (StringUtils.isNotBlank(form.getContent())) {
+            // 用户可能在审阅页改过正文；GraphPatch 必须基于最终审阅内容生成。
             chapter.setContent(form.getContent());
         }
         if (StringUtils.isNotBlank(form.getSummary())) {
+            // 摘要也允许人工改，后面 UPDATE_CHAPTER_SUMMARY 会把它同步到图谱。
             chapter.setSummary(form.getSummary());
         }
 
@@ -334,6 +356,7 @@ public class NovelWriteService {
 
         if (NovelGenerationProviderEnum.DEEPSEEK.getValue().equals(session.getProvider())
                 || NovelGenerationProviderEnum.TONGYI.getValue().equals(session.getProvider())) {
+            // 真实模型写出来的正文优先让模型自己读一遍，抽出“谁出场、线索是否推进”。
             graphPatch = novelLLMService.extractGraphPatch(project, chapter, characters, locations, clues, session.getProvider());
             if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
                 log.warn("LLM GraphPatch extraction failed or returned empty, fallback to mock. chapterNo={}", chapter.getChapterNo());
@@ -342,6 +365,7 @@ public class NovelWriteService {
         }
 
         if (graphPatch == null) {
+            // 抽取失败时用规则兜底：至少生成章节发布、候选出场、线索推进这些基本操作。
             graphPatch = buildGraphPatch(chapter);
         }
 
@@ -397,6 +421,7 @@ public class NovelWriteService {
             return ResponseDTO.userErrorParam("待确认 GraphPatch 不存在");
         }
 
+        // 前端传 operationIds 时按用户选择执行；没传时只执行默认勾选的安全项。
         NovelGraphPatchModel executablePatch = filterPatch(graphPatch, form.getOperationIds(), true);
         if (CollectionUtils.isEmpty(executablePatch.getOperations())) {
             return ResponseDTO.userErrorParam("没有可执行的 GraphPatch 操作");
@@ -405,6 +430,7 @@ public class NovelWriteService {
         // 执行前再校验一遍：防止用户停了太久，图谱已经被别人改过了
         novelGraphService.validatePatch(executablePatch);
 
+        // 只保存本次实际执行项对应的 inversePatch。这样 /undo 不会撤销用户没勾选的内容。
         NovelGraphPatchModel executableInversePatch = filterPatch(inversePatch, executablePatch.getOperations().stream()
                 .map(NovelGraphPatchOperationModel::getOperationId)
                 .collect(Collectors.toList()), false);
@@ -413,8 +439,10 @@ public class NovelWriteService {
         generationSessionDao.updateById(session);
 
         try {
+            // 真正写 Neo4j 的入口只有这里；service 外面不直接拼 Cypher。
             novelGraphService.applyGraphPatch(executablePatch);
         } catch (Exception e) {
+            // 图谱失败时正文不丢，章节进入“待同步图谱”，方便修完问题后重新确认。
             chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_UPDATE.getValue());
             novelChapterService.save(chapter);
             session.setStatus(NovelGenerationStatusEnum.PATCH_REVIEW.getValue());
@@ -436,8 +464,21 @@ public class NovelWriteService {
         changeLog.setCreateUserId(AdminRequestUtil.getRequestUserId());
         graphChangeLogDao.insert(changeLog);
 
+        // 写作日志是给后续仪表盘和成本统计看的，不参与写作状态机判断。
+        WritingLogEntity writingLog = new WritingLogEntity();
+        writingLog.setProjectId(chapter.getProjectId());
+        writingLog.setChapterId(chapter.getChapterId());
+        writingLog.setChapterNo(chapter.getChapterNo());
+        writingLog.setWordCount(StringUtils.defaultString(chapter.getContent()).replaceAll("\\s+", "").length());
+        writingLog.setTokenUsed(StringUtils.defaultString(session.getPromptSnapshot()).length() / 2);
+        writingLog.setSuccess(true);
+        writingLog.setProvider(session.getProvider());
+        writingLog.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        writingLogDao.insert(writingLog);
+
         chapter.setStatus(NovelChapterStatusEnum.PUBLISHED.getValue());
         novelChapterService.save(chapter);
+        // 发布后再 merge 一次章节节点，把 PUBLISHED 状态同步给检索层。
         novelGraphService.mergeChapter(chapter);
 
         session.setStatus(NovelGenerationStatusEnum.SUCCESS.getValue());
@@ -460,6 +501,7 @@ public class NovelWriteService {
 
         NovelChapterEntity chapter = session.getChapterId() == null ? null : novelChapterService.getById(session.getChapterId());
         if (chapter != null) {
+            // 这里只回退状态和清空候选 Patch，不回滚正文，因为用户可能只是想改文字再重新过审。
             chapter.setStatus(NovelChapterStatusEnum.DRAFT.getValue());
             novelChapterService.save(chapter);
         }
@@ -508,6 +550,7 @@ public class NovelWriteService {
         }
 
         try {
+            // 撤销执行的是 inversePatch：它只改 Neo4j，不删除 MySQL 章节正文。
             novelGraphService.applyGraphPatch(inversePatch);
         } catch (Exception e) {
             changeLog.setStatus(NovelGraphChangeStatusEnum.FAILED.getValue());
@@ -521,6 +564,7 @@ public class NovelWriteService {
 
         NovelChapterEntity chapter = changeLog.getChapterId() == null ? null : novelChapterService.getById(changeLog.getChapterId());
         if (chapter != null) {
+            // 图谱已回滚，但正文还在，所以章节变成待同步状态，提醒用户需要重新确认图谱。
             chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_UPDATE.getValue());
             novelChapterService.save(chapter);
             novelGraphService.mergeChapter(chapter);
@@ -539,6 +583,7 @@ public class NovelWriteService {
     private NovelChapterEntity saveDraftChapter(Long projectId, Integer chapterNo, String title, String summary, String content, Long sessionId) {
         NovelChapterEntity chapter = novelChapterService.getByProjectAndNo(projectId, chapterNo);
         if (chapter == null) {
+            // 同一项目同一章只保留一条正文记录，重复生成会覆盖草稿而不是插入新章节。
             chapter = new NovelChapterEntity();
             chapter.setProjectId(projectId);
             chapter.setChapterNo(chapterNo);
@@ -561,8 +606,10 @@ public class NovelWriteService {
         ChapterIntentModel intent = new ChapterIntentModel();
         intent.setProjectId(project.getProjectId());
         intent.setChapterNo(chapterNo);
+        // POV 没传就用项目主角，再没有就用第一个角色；不要让模型在“谁视角”上空转。
         intent.setPov(StringUtils.defaultIfBlank(form.getPov(), StringUtils.defaultIfBlank(project.getProtagonist(), firstCharacter(characters))));
         intent.setChapterGoal(StringUtils.defaultIfBlank(form.getChapterGoal(), "推进《" + project.getProjectName() + "》第" + chapterNo + "章的主线冲突"));
+        // 候选角色/地点/线索既服务前端预览，也服务后面 Neo4j 检索和 Prompt 组装。
         intent.setCandidateCharacters(toIntentCandidates(filterByNames(characters, form.getCandidateCharacters(), NovelCharacterEntity::getCharacterName), NovelCharacterEntity::getCharacterId, NovelCharacterEntity::getCharacterName, NovelCharacterEntity::getRoleType, "USER_OR_PROJECT"));
         intent.setTargetClues(toIntentCandidates(filterByNames(clues, form.getTargetClues(), NovelClueEntity::getClueName), NovelClueEntity::getClueId, NovelClueEntity::getClueName, NovelClueEntity::getClueType, "USER_OR_ACTIVE_CLUE"));
         intent.setCandidateLocations(toIntentCandidates(filterByNames(locations, form.getCandidateLocations(), NovelLocationEntity::getLocationName), NovelLocationEntity::getLocationId, NovelLocationEntity::getLocationName, NovelLocationEntity::getLocationType, "USER_OR_PROJECT"));
@@ -577,12 +624,14 @@ public class NovelWriteService {
             return new ArrayList<>();
         }
         if (CollectionUtils.isEmpty(names)) {
+            // 用户没指定时不要把全项目都塞给模型，最多取 5 个，控制提示词长度。
             return source.stream().limit(5).collect(Collectors.toList());
         }
         Set<String> nameSet = names.stream().filter(StringUtils::isNotBlank).collect(Collectors.toSet());
         List<T> matched = source.stream()
                 .filter(item -> nameSet.contains(nameGetter.apply(item)))
                 .collect(Collectors.toList());
+        // 前端传了名字但没匹配到时，退回默认候选，避免生成出来完全没有上下文。
         return CollectionUtils.isEmpty(matched) ? source.stream().limit(5).collect(Collectors.toList()) : matched;
     }
 
@@ -599,6 +648,7 @@ public class NovelWriteService {
             candidate.setName(nameGetter.apply(item));
             candidate.setType(typeGetter.apply(item));
             candidate.setSource(sourceType);
+            // 前 3 个默认 required，表示“尽量写进本章”；后面的只是可参考候选。
             candidate.setRequired(priority <= 3);
             candidate.setPriority(priority++);
             result.add(candidate);
@@ -619,6 +669,7 @@ public class NovelWriteService {
         preview.setCharacterCards(toContextItems(characters, NovelCharacterEntity::getCharacterId, NovelCharacterEntity::getCharacterName, NovelCharacterEntity::getRoleType, NovelCharacterEntity::getSummary, intent.getCandidateCharacters()));
         preview.setClueCards(toContextItems(clues, NovelClueEntity::getClueId, NovelClueEntity::getClueName, NovelClueEntity::getClueType, NovelClueEntity::getSummary, intent.getTargetClues()));
         preview.setLocationCards(toContextItems(locations, NovelLocationEntity::getLocationId, NovelLocationEntity::getLocationName, NovelLocationEntity::getLocationType, NovelLocationEntity::getSummary, intent.getCandidateLocations()));
+        // token 估算只是为了给前端一个“上下文大概多重”的感觉，不是精确计费。
         int textLength = StringUtils.length(project.getSummary())
                 + preview.getCharacterCards().stream().mapToInt(item -> StringUtils.length(item.getSummary())).sum()
                 + preview.getClueCards().stream().mapToInt(item -> StringUtils.length(item.getSummary())).sum()
@@ -640,6 +691,7 @@ public class NovelWriteService {
         for (T item : source) {
             Long id = idGetter.apply(item);
             if (!candidateIds.contains(id)) {
+                // 预览只展示本章候选，不把全项目设定都摊出来，避免审阅页太乱。
                 continue;
             }
             ContextPreviewItemModel contextItem = new ContextPreviewItemModel();
@@ -658,10 +710,13 @@ public class NovelWriteService {
     private ContentQualityCheckModel buildQualityCheck(String content, ChapterIntentModel intent) {
         ContentQualityCheckModel qualityCheck = new ContentQualityCheckModel();
         String safeContent = StringUtils.defaultString(content);
+        // 对中文网文先用“去空白字符长度”粗略当字数，够排查和前端提示用。
         qualityCheck.setWordCount(safeContent.replaceAll("\\s+", "").length());
         String pov = intent == null ? null : intent.getPov();
         qualityCheck.setPov(pov);
+        // 这是轻量规则，不做 NLP：只检查 POV 名字有没有在正文出现。
         qualityCheck.setPovMentioned(StringUtils.isBlank(pov) || safeContent.contains(pov));
+        // 章末检测同样是兜底提示，真正好坏仍由人工审阅。
         qualityCheck.setHasChapterEnding(safeContent.contains("下一章") || safeContent.contains("结尾") || safeContent.contains("入口"));
         if (qualityCheck.getWordCount() < 500) {
             qualityCheck.getWarnings().add("当前 mock 草稿字数偏短，真实模型接入后需放宽目标字数。");
@@ -676,9 +731,14 @@ public class NovelWriteService {
     }
 
     private NovelGraphPatchModel buildGraphPatch(NovelChapterEntity chapter) {
+        // 兜底 GraphPatch 只基于已有资产和正文关键词判断，不创造复杂事实。
         List<NovelCharacterEntity> characters = novelAssetService.listCharacters(chapter.getProjectId());
         List<NovelLocationEntity> locations = novelAssetService.listLocations(chapter.getProjectId());
         List<NovelClueEntity> clues = novelAssetService.listClues(chapter.getProjectId());
+        List<NovelItemEntity> items = novelAssetService.listItems(chapter.getProjectId());
+        List<NovelEventEntity> events = novelAssetService.listEvents(chapter.getProjectId());
+        List<NovelCheatEntity> cheats = novelAssetService.listCheats(chapter.getProjectId());
+        List<NovelAliasEntity> aliases = novelAssetService.listAliases(chapter.getProjectId());
 
         NovelGraphPatchModel patch = new NovelGraphPatchModel();
         patch.setPatchId(UUID.randomUUID().toString());
@@ -689,8 +749,13 @@ public class NovelWriteService {
         patch.setStatus(PATCH_READY);
 
         addChapterSummaryOperation(patch, chapter);
+        // 候选数量故意限制：兜底逻辑宁可少提几条，也不把整本书资产都塞进审阅单。
         characters.stream().limit(5).forEach(character -> addAppearanceOperation(patch, "CHARACTER", character.getCharacterId(), character.getCharacterName(), chapter.getContent()));
         locations.stream().limit(2).forEach(location -> addAppearanceOperation(patch, "LOCATION", location.getLocationId(), location.getLocationName(), chapter.getContent()));
+        items.stream().limit(3).forEach(item -> addAppearanceOperation(patch, "ITEM", item.getItemId(), item.getItemName(), chapter.getContent()));
+        events.stream().limit(2).forEach(event -> addAppearanceOperation(patch, "EVENT", event.getEventId(), event.getEventName(), chapter.getContent()));
+        cheats.stream().limit(2).forEach(cheat -> addAppearanceOperation(patch, "CHEAT", cheat.getCheatId(), cheat.getCheatName(), chapter.getContent()));
+        aliases.stream().limit(2).forEach(alias -> addAppearanceOperation(patch, "ALIAS", alias.getAliasId(), alias.getAliasName(), chapter.getContent()));
         clues.stream().limit(1).forEach(clue -> addClueOperation(patch, clue, chapter));
         if (patch.getOperations().stream().anyMatch(operation -> PATCH_LOW_CONFIDENCE.equals(operation.getValidationStatus()))) {
             patch.getWarnings().add("存在低置信操作，默认不勾选；确认前请人工检查。");
@@ -713,6 +778,7 @@ public class NovelWriteService {
     }
 
     private void addAppearanceOperation(NovelGraphPatchModel patch, String targetType, Long targetId, String targetName, String content) {
+        // 名字真的出现在正文里才默认勾选；没出现的只作为低置信候选，让人来判断。
         boolean mentioned = StringUtils.contains(content, targetName);
         NovelGraphPatchOperationModel operation = baseOperation(patch, "MARK_APPEARANCE", targetType, targetId, targetName);
         operation.setConfidence(mentioned ? CONFIDENCE_HIGH : CONFIDENCE_LOW);
@@ -724,6 +790,7 @@ public class NovelWriteService {
     }
 
     private void addClueOperation(NovelGraphPatchModel patch, NovelClueEntity clue, NovelChapterEntity chapter) {
+        // 线索推进比出场更敏感，所以即使没显式提到，也标成 MEDIUM 而不是直接丢掉。
         boolean mentioned = StringUtils.contains(chapter.getContent(), clue.getClueName());
         NovelGraphPatchOperationModel operation = baseOperation(patch, "ADVANCE_CLUE", "CLUE", clue.getClueId(), clue.getClueName());
         operation.setBeforeStatus(clue.getClueStatus());
@@ -740,6 +807,7 @@ public class NovelWriteService {
 
     private NovelGraphPatchOperationModel baseOperation(NovelGraphPatchModel patch, String operationType, String targetType, Long targetId, String targetName) {
         NovelGraphPatchOperationModel operation = new NovelGraphPatchOperationModel();
+        // 每条 operation 都有自己的 ID，前端勾选和后端生成 inversePatch 都靠它对齐。
         operation.setOperationId(UUID.randomUUID().toString());
         operation.setOperationType(operationType);
         operation.setTargetType(targetType);
@@ -748,6 +816,15 @@ public class NovelWriteService {
         return operation;
     }
 
+    /**
+     * 根据正向 GraphPatch 生成反向变更单。
+     *
+     * 它不是完美的时间机器，但要做到“用户点撤销时，图谱尽量回到确认前”：
+     * - 状态、摘要、通用 value 会前后对调；
+     * - 出场记录会变成删除 APPEARS_IN；
+     * - 线索推进会变成恢复旧线索状态；
+     * - 新增节点不物理删除，而是归档，方便排查历史。
+     */
     private NovelGraphPatchModel buildInversePatch(NovelGraphPatchModel graphPatch) {
         NovelGraphPatchModel inversePatch = new NovelGraphPatchModel();
         inversePatch.setPatchId(UUID.randomUUID().toString());
@@ -758,31 +835,54 @@ public class NovelWriteService {
         inversePatch.setStatus(PATCH_READY);
         for (NovelGraphPatchOperationModel operation : graphPatch.getOperations()) {
             NovelGraphPatchOperationModel inverseOperation = new NovelGraphPatchOperationModel();
+            // operationId 保持一致，方便前端和 graph_change_log 对照“正向哪条对应反向哪条”。
             inverseOperation.setOperationId(operation.getOperationId());
             inverseOperation.setTargetType(operation.getTargetType());
             inverseOperation.setTargetId(operation.getTargetId());
             inverseOperation.setTargetName(operation.getTargetName());
+            inverseOperation.setSourceType(operation.getSourceType());
+            inverseOperation.setSourceName(operation.getSourceName());
+            inverseOperation.setFromName(operation.getToName());
+            inverseOperation.setToName(operation.getFromName());
+            inverseOperation.setRelationType(operation.getRelationType());
             inverseOperation.setBeforeStatus(operation.getAfterStatus());
             inverseOperation.setAfterStatus(operation.getBeforeStatus());
             inverseOperation.setBeforeSummary(operation.getAfterSummary());
             inverseOperation.setAfterSummary(operation.getBeforeSummary());
+            inverseOperation.setBeforeValue(operation.getAfterValue());
+            inverseOperation.setAfterValue(operation.getBeforeValue());
+            inverseOperation.setProperties(operation.getProperties());
             inverseOperation.setConfidence(operation.getConfidence());
             inverseOperation.setValidationStatus(operation.getValidationStatus());
             inverseOperation.setSelected(operation.getSelected());
             inverseOperation.setEvidence("反向操作：" + StringUtils.defaultString(operation.getEvidence()));
             inverseOperation.setReason("撤销 GraphPatch 操作。");
+            // 不同业务动作的撤销语义不一样，这里把“正向动作”翻译成“反向动作”。
             if ("UPDATE_CHAPTER_SUMMARY".equals(operation.getOperationType())) {
                 inverseOperation.setOperationType("RESTORE_CHAPTER_SUMMARY");
             } else if ("MARK_APPEARANCE".equals(operation.getOperationType())) {
                 inverseOperation.setOperationType("UNMARK_APPEARANCE");
             } else if ("ADVANCE_CLUE".equals(operation.getOperationType())) {
                 inverseOperation.setOperationType("RESTORE_CLUE");
+            } else if (StringUtils.startsWith(operation.getOperationType(), "CREATE_")) {
+                inverseOperation.setOperationType("ARCHIVE_NODE");
+            } else {
+                inverseOperation.setOperationType(operation.getOperationType());
             }
             inversePatch.getOperations().add(inverseOperation);
         }
         return inversePatch;
     }
 
+    /**
+     * 从 GraphPatch 中筛出真正要执行的操作。
+     *
+     * 两种模式：
+     * - operationIds 为空：按 selected=true 自动选中项执行，低置信项默认不执行；
+     * - operationIds 不为空：尊重用户明确勾选，即使它是 LOW_CONFIDENCE 也允许进入执行队列。
+     *
+     * 注意：这里不处理 BLOCKED / CONFLICT，那是 NovelGraphService.applyGraphPatch 的最后防线。
+     */
     private NovelGraphPatchModel filterPatch(NovelGraphPatchModel patch, List<String> operationIds, boolean defaultSelectedOnly) {
         Set<String> operationIdSet = CollectionUtils.isEmpty(operationIds) ? new HashSet<>() : new HashSet<>(operationIds);
         NovelGraphPatchModel filtered = new NovelGraphPatchModel();
