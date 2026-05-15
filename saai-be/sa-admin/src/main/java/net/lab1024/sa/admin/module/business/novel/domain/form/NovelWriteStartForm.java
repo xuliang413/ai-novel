@@ -6,7 +6,7 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * M1 mock 写作启动表单。
+ * 写作启动表单。
  */
 @Data
 public class NovelWriteStartForm {

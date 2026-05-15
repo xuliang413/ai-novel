@@ -7,31 +7,23 @@ import net.lab1024.sa.base.common.enumeration.BaseEnum;
 /**
  * 小说知识图谱关系类型枚举。
  *
- * M0 维护 Project 到基础实体的拥有关系，M1 扩展出场、推进线索等剧情关系。
+ * 结构关系 CONTAINS + PREVIOUS，剧情关系 APPEARS_IN、ADVANCES。
  */
 @AllArgsConstructor
 @Getter
 public enum NovelGraphRelationEnum implements BaseEnum {
 
     /**
-     * 项目拥有角色。
+     * 项目包含实体（Character/Location/Clue）。
+     * 方案 §4.3：Project-[:CONTAINS]->Volume-[:CONTAINS]->Chapter。
+     * Volume 未建时 Project-[:CONTAINS]->Chapter 直连。
      */
-    HAS_CHARACTER("HAS_CHARACTER", "项目拥有角色"),
+    CONTAINS("CONTAINS", "项目包含实体"),
 
     /**
-     * 项目拥有地点。
+     * 上一章 → 下一章。方案 §4.3：建立写作链路。
      */
-    HAS_LOCATION("HAS_LOCATION", "项目拥有地点"),
-
-    /**
-     * 项目拥有线索。
-     */
-    HAS_CLUE("HAS_CLUE", "项目拥有线索"),
-
-    /**
-     * 项目拥有章节。
-     */
-    HAS_CHAPTER("HAS_CHAPTER", "项目拥有章节"),
+    PREVIOUS("PREVIOUS", "上一章到下一章"),
 
     /**
      * 实体在章节中出场。

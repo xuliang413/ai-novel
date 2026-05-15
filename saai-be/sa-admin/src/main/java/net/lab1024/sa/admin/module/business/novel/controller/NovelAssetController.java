@@ -15,9 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * AI 小说基础设定接口。
- *
- * M0 阶段先提供角色、地点、线索三类设定录入，后续可继续拆成独立 controller。
+ * 小说设定接口——角色、地点、线索的录入和查询。
  */
 @RestController
 @RequestMapping("/novel")

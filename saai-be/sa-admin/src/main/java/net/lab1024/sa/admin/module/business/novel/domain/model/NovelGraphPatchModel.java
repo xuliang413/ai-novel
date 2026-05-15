@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * M1 业务语义型 GraphPatch。
+ * 图谱变更单。
  */
 @Data
 public class NovelGraphPatchModel {

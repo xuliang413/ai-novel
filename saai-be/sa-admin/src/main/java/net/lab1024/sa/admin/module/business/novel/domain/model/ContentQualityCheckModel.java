@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * M1 正文审阅最小质检结果。
+ * 正文自动质检结果。
  */
 @Data
 public class ContentQualityCheckModel {

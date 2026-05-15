@@ -15,9 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * AI 小说章节接口。
- *
- * M0 只提供章节查询，章节写入由写作接口统一触发。
+ * 章节查询接口——章节写入由写作接口统一触发。
  */
 @RestController
 @RequestMapping("/novel/chapter")

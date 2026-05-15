@@ -22,8 +22,17 @@ import org.springframework.stereotype.Service;
 /**
  * 小说知识图谱服务。
  *
- * M0 只做最小图谱写入：Project 以及其下的 Character、Location、Clue、Chapter。
- * 图谱标签、关系类型、核心属性名都从枚举取值，避免后续扩展时出现拼写不一致。
+ * 把 MySQL 中的项目、角色、地点、线索、章节同步到 Neo4j 中。
+ * 图谱标签、关系类型、核心属性名都从枚举里取，避免拼错。
+ *
+ * 关系（按方案 §4.3）：
+ *   CONTAINS —— 项目包含实体（角色/地点/线索/章节，Volume 未建时直连）
+ *   PREVIOUS —— 章节前后顺序链
+ *   APPEARS_IN —— 实体在某章出场
+ *   ADVANCES —— 章节推进某条线索
+ *
+ * GraphPatch 白名单执行器（方案 §5.2.6）：
+ *   只接受 6 种操作，后端拼 Cypher 防止注入，所有 Cypher 带 projectId 做项目隔离。
  */
 @Service
 @Slf4j
@@ -123,7 +132,7 @@ public class NovelGraphService {
                 property(NovelGraphPropertyEnum.SUMMARY),
                 property(NovelGraphPropertyEnum.STATUS),
                 property(NovelGraphPropertyEnum.UPDATED_AT),
-                relation(NovelGraphRelationEnum.HAS_CHARACTER),
+                relation(NovelGraphRelationEnum.CONTAINS),
                 property(NovelGraphPropertyEnum.PROJECT_ID),
                 property(NovelGraphPropertyEnum.CREATED_AT),
                 property(NovelGraphPropertyEnum.UPDATED_AT)
@@ -178,7 +187,7 @@ public class NovelGraphService {
                 property(NovelGraphPropertyEnum.TYPE),
                 property(NovelGraphPropertyEnum.SUMMARY),
                 property(NovelGraphPropertyEnum.UPDATED_AT),
-                relation(NovelGraphRelationEnum.HAS_LOCATION),
+                relation(NovelGraphRelationEnum.CONTAINS),
                 property(NovelGraphPropertyEnum.PROJECT_ID),
                 property(NovelGraphPropertyEnum.CREATED_AT),
                 property(NovelGraphPropertyEnum.UPDATED_AT)
@@ -234,7 +243,7 @@ public class NovelGraphService {
                 property(NovelGraphPropertyEnum.STATUS),
                 property(NovelGraphPropertyEnum.SUMMARY),
                 property(NovelGraphPropertyEnum.UPDATED_AT),
-                relation(NovelGraphRelationEnum.HAS_CLUE),
+                relation(NovelGraphRelationEnum.CONTAINS),
                 property(NovelGraphPropertyEnum.PROJECT_ID),
                 property(NovelGraphPropertyEnum.CREATED_AT),
                 property(NovelGraphPropertyEnum.UPDATED_AT)
@@ -293,7 +302,7 @@ public class NovelGraphService {
                 property(NovelGraphPropertyEnum.SUMMARY),
                 property(NovelGraphPropertyEnum.STATUS),
                 property(NovelGraphPropertyEnum.UPDATED_AT),
-                relation(NovelGraphRelationEnum.HAS_CHAPTER),
+                relation(NovelGraphRelationEnum.CONTAINS),
                 property(NovelGraphPropertyEnum.PROJECT_ID),
                 property(NovelGraphPropertyEnum.CREATED_AT),
                 property(NovelGraphPropertyEnum.UPDATED_AT)
@@ -309,15 +318,117 @@ public class NovelGraphService {
                         "summary", chapter.getSummary(),
                         "status", chapter.getStatus()
                 ));
+                // 建立 PREVIOUS 关系：上一章 → 这一章
+                if (chapter.getChapterNo() != null && chapter.getChapterNo() > 1) {
+                    linkPrevious(tx, chapter.getProjectId(), chapter.getChapterNo());
+                }
                 return null;
             });
         }
     }
 
     /**
-     * 执行业务语义型 GraphPatch。
+     * 建立 PREVIOUS 关系：(第N-1章)-[:PREVIOUS]->(第N章)。
      *
-     * 这里是 M1 图谱写入的唯一入口：只接受白名单 operationType，并由后端拼装受控 Cypher。
+     * 如果第 N-1 章还不存在（比如先写了第 3 章再补第 2 章），这条关系暂时缺失，等补写时自然补上。
+     */
+    private void linkPrevious(TransactionContext tx, Long projectId, Integer chapterNo) {
+        tx.run("""
+                MATCH (prev:Chapter {projectId: $projectId, number: $prevNo})
+                MATCH (cur:Chapter {projectId: $projectId, number: $curNo})
+                MERGE (prev)-[:PREVIOUS {projectId: $projectId}]->(cur)
+                """,
+                Values.parameters("projectId", projectId, "prevNo", chapterNo - 1, "curNo", chapterNo));
+    }
+
+    /**
+     * 写入前先查一遍 Neo4j，看 patch 里声称的改前值跟图谱里实际的一不一致。
+     *
+     * 查到不一致就标成 CONFLICT，让用户自己决定。
+     * 比如用户在变更确认页停了很久，中间另一个人改了图谱，就能检测出来。
+     */
+    public void validatePatch(NovelGraphPatchModel graphPatch) {
+        if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
+            return;
+        }
+        try (Session session = novelNeo4jDriver.session()) {
+            for (NovelGraphPatchOperationModel op : graphPatch.getOperations()) {
+                if (!"READY".equals(op.getValidationStatus())) {
+                    continue;
+                }
+                if ("ADVANCE_CLUE".equals(op.getOperationType())) {
+                    checkClueBefore(session, graphPatch.getProjectId(), op);
+                } else if ("UPDATE_CHAPTER_SUMMARY".equals(op.getOperationType())) {
+                    checkChapterBefore(session, graphPatch.getProjectId(), graphPatch.getChapterNo(), op);
+                }
+                // MARK_APPEARANCE 没有 before 值要对比（第一次出场不会有冲突）
+            }
+        }
+    }
+
+    private void checkClueBefore(Session session, Long projectId, NovelGraphPatchOperationModel op) {
+        var result = session.run(
+                "MATCH (c:Clue {projectId: $pid, name: $name}) RETURN c.status AS status, c.summary AS summary",
+                Values.parameters("pid", projectId, "name", op.getTargetName()));
+        if (result.hasNext()) {
+            var rec = result.single();
+            String currentStatus = rec.get("status", (String) null);
+            String beforeStatus = op.getBeforeStatus();
+            if (beforeStatus != null && !beforeStatus.equals(currentStatus)) {
+                op.setValidationStatus("CONFLICT");
+                op.setReason("线索 " + op.getTargetName() + " 的状态已经不是 " + beforeStatus + "，当前是 " + currentStatus);
+            }
+        }
+    }
+
+    private void checkChapterBefore(Session session, Long projectId, Integer chapterNo, NovelGraphPatchOperationModel op) {
+        var result = session.run(
+                "MATCH (ch:Chapter {projectId: $pid, number: $no}) RETURN ch.summary AS summary",
+                Values.parameters("pid", projectId, "no", chapterNo));
+        if (result.hasNext()) {
+            var rec = result.single();
+            String currentSummary = rec.get("summary", (String) null);
+            String beforeSummary = op.getBeforeSummary();
+            if (beforeSummary != null && currentSummary != null && !beforeSummary.equals(currentSummary)) {
+                op.setValidationStatus("CONFLICT");
+                op.setReason("章节摘要已在图谱中发生变化，可能被其他操作改过");
+            }
+        }
+    }
+
+    /**
+     * 检查必填字段——缺了关键字段的操作标成 BLOCKED，不让执行。
+     */
+    public void checkBlocked(NovelGraphPatchModel graphPatch) {
+        if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
+            return;
+        }
+        for (NovelGraphPatchOperationModel op : graphPatch.getOperations()) {
+            if ("BLOCKED".equals(op.getValidationStatus())) {
+                continue;
+            }
+            if (op.getOperationType() == null) {
+                op.setValidationStatus("BLOCKED");
+                op.setReason("缺少 operationType");
+                continue;
+            }
+            if ("MARK_APPEARANCE".equals(op.getOperationType()) || "UNMARK_APPEARANCE".equals(op.getOperationType())) {
+                if (op.getTargetName() == null || op.getTargetType() == null) {
+                    op.setValidationStatus("BLOCKED");
+                    op.setReason("出场操作缺少 targetName 或 targetType");
+                }
+            }
+            if ("ADVANCE_CLUE".equals(op.getOperationType()) || "RESTORE_CLUE".equals(op.getOperationType())) {
+                if (op.getTargetName() == null) {
+                    op.setValidationStatus("BLOCKED");
+                    op.setReason("线索操作缺少 targetName");
+                }
+            }
+        }
+    }
+
+    /**
+     * 真正往 Neo4j 里面写数据。只执行校验过的操作，被标了 BLOCKED 和 CONFLICT 的跳过。
      */
     public void applyGraphPatch(NovelGraphPatchModel graphPatch) {
         if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
@@ -327,6 +438,10 @@ public class NovelGraphService {
         try (Session session = novelNeo4jDriver.session()) {
             session.executeWrite(tx -> {
                 for (NovelGraphPatchOperationModel operation : graphPatch.getOperations()) {
+                    if ("BLOCKED".equals(operation.getValidationStatus())
+                            || "CONFLICT".equals(operation.getValidationStatus())) {
+                        continue;
+                    }
                     executePatchOperation(tx, graphPatch, operation);
                 }
                 return null;
@@ -334,6 +449,9 @@ public class NovelGraphService {
         }
     }
 
+    /**
+     * 白名单分发：根据 operationType 路由到对应的 Cypher 执行方法。
+     */
     private void executePatchOperation(TransactionContext tx, NovelGraphPatchModel graphPatch, NovelGraphPatchOperationModel operation) {
         String operationType = operation.getOperationType();
         if ("UPDATE_CHAPTER_SUMMARY".equals(operationType) || "RESTORE_CHAPTER_SUMMARY".equals(operationType)) {

@@ -6,7 +6,7 @@ import net.lab1024.sa.admin.module.business.novel.domain.model.ContentQualityChe
 import net.lab1024.sa.admin.module.business.novel.domain.model.ContextPreviewModel;
 
 /**
- * M1 写作启动结果。
+ * 写作启动结果。
  */
 @Data
 public class NovelWriteDraftVO {

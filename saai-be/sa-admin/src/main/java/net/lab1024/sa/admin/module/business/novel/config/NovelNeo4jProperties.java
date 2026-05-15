@@ -30,7 +30,7 @@ public class NovelNeo4jProperties {
     private String password;
 
     /**
-     * 是否在应用启动时自动创建 M0 图谱约束。
+     * 是否在启动时自动创建图谱约束。
      */
     private boolean initSchema = true;
 }

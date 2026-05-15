@@ -23,9 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 /**
- * 小说基础设定服务。
- *
- * M0 阶段先管理角色、地点、线索三类资产，并在新增时同步写入 Neo4j 最小图谱。
+ * 小说设定服务——角色、地点、线索的增删查，新增时同步到 Neo4j 图谱。
  */
 @Service
 public class NovelAssetService {

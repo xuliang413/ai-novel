@@ -3,6 +3,7 @@ package net.lab1024.sa.admin.module.business.novel.service;
 import com.alibaba.fastjson.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelChapterStatusEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelClueStatusEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGenerationProviderEnum;
@@ -21,7 +22,6 @@ import net.lab1024.sa.admin.module.business.novel.domain.form.NovelContentReview
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchBackForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelPatchConfirmForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelUndoForm;
-import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteMockForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteRecoverForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelWriteStartForm;
 import net.lab1024.sa.admin.module.business.novel.domain.model.ChapterIntentCandidateModel;
@@ -54,10 +54,19 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * 小说写作服务。
+ * 写作编排——把各个步骤串起来，控制整个写作流程。
  *
- * M0 保留 mock 生成链路；M1 在其上补齐“意图、上下文、正文审阅、GraphPatch、确认、撤销、恢复”最小闭环。
+ * 一个完整的写作流程：
+ * 1. 用户点"开始写作" → 自动检测有没有可用的 AI Key
+ * 2. 有 Key → 调 AI 写一章，没有 → 用 mock 数据
+ * 3. 写完先保存草稿，质检通过后进入审阅
+ * 4. 用户通过审阅 → AI 抽取图谱变更 → 展示变更单让用户确认
+ * 5. 用户确认变更 → 写入 Neo4j，章节正式发布
+ * 6. 写错了可以撤销（undo），只撤图谱不删正文
+ *
+ * 降级保护：API Key 没配 → AI 调用失败 → 都自动 fallback 到 mock，不阻塞流程。
  */
+@Slf4j
 @Service
 public class NovelWriteService {
 
@@ -89,50 +98,28 @@ public class NovelWriteService {
     @Resource
     private GraphChangeLogDao graphChangeLogDao;
 
-    /**
-     * 执行 M0 mock 章节生成。
-     */
-    @Transactional(rollbackFor = Exception.class)
-    public ResponseDTO<NovelChapterVO> writeMock(NovelWriteMockForm form) {
-        NovelProjectEntity project = novelProjectService.getAvailableProject(form.getProjectId());
-        if (project == null) {
-            return ResponseDTO.userErrorParam("小说项目不存在");
-        }
+    @Resource
+    private NovelLLMService novelLLMService;
 
-        Integer chapterNo = form.getChapterNo() == null ? novelChapterService.getNextChapterNo(form.getProjectId()) : form.getChapterNo();
-        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(form.getProjectId());
-        List<NovelLocationEntity> locations = novelAssetService.listLocations(form.getProjectId());
-        List<NovelClueEntity> clues = novelAssetService.listClues(form.getProjectId());
+    @Resource
+    private net.lab1024.sa.admin.module.business.novel.dao.UserApiKeyDao userApiKeyDao;
 
-        String contextSnapshot = buildContextSnapshot(project, characters, locations, clues);
-        String title = "第" + chapterNo + "章：" + project.getProjectName();
-        String summary = "第" + chapterNo + "章 mock 草稿。";
-        String content = buildMockContent(project, chapterNo, characters, locations, clues);
-
-        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
-        session.setProjectId(form.getProjectId());
-        session.setChapterNo(chapterNo);
-        session.setProvider(NovelGenerationProviderEnum.MOCK.getValue());
-        session.setStatus(NovelGenerationStatusEnum.SUCCESS.getValue());
-        session.setPromptSnapshot("/write " + chapterNo);
-        session.setContextSnapshot(contextSnapshot);
-        session.setResultExcerpt(StringUtils.abbreviate(content, 500));
-        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
-        generationSessionDao.insert(session);
-
-        NovelChapterEntity chapter = saveDraftChapter(form.getProjectId(), chapterNo, title, summary, content, session.getSessionId());
-        session.setChapterId(chapter.getChapterId());
-        generationSessionDao.updateById(session);
-        novelGraphService.mergeProject(project);
-        novelGraphService.mergeChapter(chapter);
-        return ResponseDTO.ok(toChapterVO(chapter));
-    }
+    @Resource
+    private net.lab1024.sa.base.module.support.apiencrypt.service.ApiEncryptService apiEncryptService;
 
     /**
-     * M1 启动 mock 写作：生成 ChapterIntent、ContextPreview、正文草稿并停在 CONTENT_REVIEW。
+     * 开始写作——自动判断用 DeepSeek 还是通义千问，都没有就降级。
+     *
+     * 流程：
+     * 1. 检查项目在不在、算出下一个章节号
+     * 2. 组装写作意图（ChapterIntent）——这章视角谁、想写什么
+     * 3. 查 API Key 表，有可用的 Key 就用 AI，都没有就降级
+     * 4. 写完了看看质量行不行（字数够不够、POV 角色出场没）
+     * 5. 质量没问题就存 session + 存章节（状态 CONTENT_REVIEW）
+     * 6. 同步一份到 Neo4j 图谱上
      */
     @Transactional(rollbackFor = Exception.class)
-    public ResponseDTO<NovelWriteDraftVO> startMock(NovelWriteStartForm form) {
+    public ResponseDTO<NovelWriteDraftVO> start(NovelWriteStartForm form) {
         NovelProjectEntity project = novelProjectService.getAvailableProject(form.getProjectId());
         if (project == null) {
             return ResponseDTO.userErrorParam("小说项目不存在");
@@ -145,17 +132,43 @@ public class NovelWriteService {
 
         ChapterIntentModel intent = buildChapterIntent(form, project, chapterNo, characters, locations, clues);
         ContextPreviewModel contextPreview = buildContextPreview(project, chapterNo, intent, characters, locations, clues);
-        String title = "第" + chapterNo + "章：" + project.getProjectName();
-        String summary = "第" + chapterNo + "章 M1 待审阅草稿。";
-        String content = buildMockContent(project, chapterNo, characters, locations, clues);
+
+        String provider = resolveAvailableProvider();
+        String title;
+        String summary;
+        String content;
+        String promptSnapshot;
+
+        if ("DEEPSEEK".equals(provider) || "TONGYI".equals(provider)) {
+            promptSnapshot = buildPromptSnapshot(project, intent, contextPreview, provider);
+            NovelLLMService.LLMChapterResult result = novelLLMService.generateChapter(project, intent, contextPreview, provider);
+            if (result != null && StringUtils.isNotBlank(result.content()) && StringUtils.isNotBlank(result.title())) {
+                title = result.title();
+                summary = result.summary();
+                content = result.content();
+            } else {
+                provider = NovelGenerationProviderEnum.MOCK.getValue();
+                title = "第" + chapterNo + "章：" + project.getProjectName();
+                summary = "第" + chapterNo + "章待审阅草稿（LLM 调用失败，回退降级）。";
+                content = buildMockContent(project, chapterNo, characters, locations, clues);
+                promptSnapshot = "/write " + chapterNo + " (fallback to mock)";
+            }
+        } else {
+            provider = NovelGenerationProviderEnum.MOCK.getValue();
+            title = "第" + chapterNo + "章：" + project.getProjectName();
+            summary = "第" + chapterNo + "章待审阅草稿（未配置 AI Key，使用降级模式）。";
+            content = buildMockContent(project, chapterNo, characters, locations, clues);
+            promptSnapshot = "/write " + chapterNo;
+        }
+
         ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
 
         ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
         session.setProjectId(form.getProjectId());
         session.setChapterNo(chapterNo);
-        session.setProvider(NovelGenerationProviderEnum.MOCK.getValue());
+        session.setProvider(provider);
         session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
-        session.setPromptSnapshot("/write " + chapterNo);
+        session.setPromptSnapshot(promptSnapshot);
         session.setIntentJson(JSON.toJSONString(intent));
         session.setContextSnapshot(JSON.toJSONString(contextPreview));
         session.setContentReviewJson(JSON.toJSONString(qualityCheck));
@@ -181,7 +194,114 @@ public class NovelWriteService {
     }
 
     /**
-     * 正文审阅通过后生成 GraphPatch，并停在 PATCH_REVIEW。
+     * 流式写作——AI 写到哪就实时推送出去，最后才保存。
+     *
+     * 跟 startMock 的区别：
+     * - 不等人写完整章，收到一个字就推一个字
+     * - onToken、onComplete、onError 三个回调给 WebSocket Handler 用
+     * - 只有 onComplete 被调用时才存 session + 存章节
+     */
+    public void startStream(NovelWriteStartForm form,
+                            java.util.function.Consumer<String> onToken,
+                            java.util.function.Consumer<NovelWriteDraftVO> onComplete,
+                            java.util.function.Consumer<String> onError) {
+        NovelProjectEntity project = novelProjectService.getAvailableProject(form.getProjectId());
+        if (project == null) {
+            onError.accept("小说项目不存在");
+            return;
+        }
+
+        Integer chapterNo = form.getChapterNo() == null ? novelChapterService.getNextChapterNo(form.getProjectId()) : form.getChapterNo();
+        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(form.getProjectId());
+        List<NovelLocationEntity> locations = novelAssetService.listLocations(form.getProjectId());
+        List<NovelClueEntity> clues = novelAssetService.listClues(form.getProjectId());
+
+        ChapterIntentModel intent = buildChapterIntent(form, project, chapterNo, characters, locations, clues);
+        ContextPreviewModel contextPreview = buildContextPreview(project, chapterNo, intent, characters, locations, clues);
+
+        String provider = resolveAvailableProvider();
+        if (NovelGenerationProviderEnum.MOCK.getValue().equals(provider)) {
+            String title = "第" + chapterNo + "章：" + project.getProjectName();
+            String content = buildMockContent(project, chapterNo, characters, locations, clues);
+            String summary = "第" + chapterNo + "章待审阅草稿（未配置 AI Key，使用降级模式）。";
+            NovelWriteDraftVO vo = saveStreamSession(form.getProjectId(), chapterNo, provider,
+                    title, summary, content, intent, contextPreview, project);
+            onToken.accept(content);
+            onComplete.accept(vo);
+            return;
+        }
+
+        novelLLMService.generateChapterStream(project, intent, contextPreview, provider,
+                onToken,
+                result -> {
+                    try {
+                        if (result == null || StringUtils.isBlank(result.content()) || StringUtils.isBlank(result.title())) {
+                            String fallbackTitle = "第" + chapterNo + "章：" + project.getProjectName();
+                            String fallbackContent = buildMockContent(project, chapterNo, characters, locations, clues);
+                            String fallbackSummary = "第" + chapterNo + "章待审阅草稿（LLM 调用失败，回退降级）。";
+                            NovelWriteDraftVO vo = saveStreamSession(form.getProjectId(), chapterNo,
+                                    NovelGenerationProviderEnum.MOCK.getValue(),
+                                    fallbackTitle, fallbackSummary, fallbackContent,
+                                    intent, contextPreview, project);
+                            onComplete.accept(vo);
+                        } else {
+                            NovelWriteDraftVO vo = saveStreamSession(form.getProjectId(), chapterNo, provider,
+                                    result.title(), result.summary(), result.content(),
+                                    intent, contextPreview, project);
+                            onComplete.accept(vo);
+                        }
+                    } catch (Exception e) {
+                        log.error("Failed to save stream session", e);
+                        onError.accept("保存章节失败：" + e.getMessage());
+                    }
+                },
+                errorMsg -> onError.accept(errorMsg));
+    }
+
+    private NovelWriteDraftVO saveStreamSession(Long projectId, Integer chapterNo, String provider,
+                                                 String title, String summary, String content,
+                                                 ChapterIntentModel intent, ContextPreviewModel contextPreview,
+                                                 NovelProjectEntity project) {
+        ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
+
+        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
+        session.setProjectId(projectId);
+        session.setChapterNo(chapterNo);
+        session.setProvider(provider);
+        session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
+        session.setPromptSnapshot(provider + ":/write " + chapterNo + " pov=" + intent.getPov());
+        session.setIntentJson(JSON.toJSONString(intent));
+        session.setContextSnapshot(JSON.toJSONString(contextPreview));
+        session.setContentReviewJson(JSON.toJSONString(qualityCheck));
+        session.setResultExcerpt(StringUtils.abbreviate(content, 500));
+        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        generationSessionDao.insert(session);
+
+        NovelChapterEntity chapter = saveDraftChapter(projectId, chapterNo, title, summary, content, session.getSessionId());
+        session.setChapterId(chapter.getChapterId());
+        generationSessionDao.updateById(session);
+
+        novelGraphService.mergeProject(project);
+        novelGraphService.mergeChapter(chapter);
+
+        NovelWriteDraftVO vo = new NovelWriteDraftVO();
+        vo.setSessionId(session.getSessionId());
+        vo.setSessionStatus(session.getStatus());
+        vo.setChapter(toChapterVO(chapter));
+        vo.setChapterIntent(intent);
+        vo.setContextPreview(contextPreview);
+        vo.setQualityCheck(qualityCheck);
+        return vo;
+    }
+
+    /**
+     * 正文审阅通过 → 生成图谱变更单 → 停在变更确认页。
+     *
+     * 怎么生成变更单：
+     * - 如果这章是 DeepSeek/通义千问写的 → 优先让 AI 看一遍正文自动抽取
+     * - AI 抽取失败或者这章是 mock 的 → 用老方法（buildGraphPatch）生成默认变更
+     *
+     * 这里只是生成变更单，不会真的写 Neo4j。要等 confirmPatch 才是真写。
      */
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<NovelGraphPatchVO> passContentReview(NovelContentReviewPassForm form) {
@@ -204,7 +324,31 @@ public class NovelWriteService {
 
         ChapterIntentModel intent = parse(session.getIntentJson(), ChapterIntentModel.class);
         ContentQualityCheckModel qualityCheck = buildQualityCheck(chapter.getContent(), intent);
-        NovelGraphPatchModel graphPatch = buildGraphPatch(chapter);
+
+        List<NovelCharacterEntity> characters = novelAssetService.listCharacters(chapter.getProjectId());
+        List<NovelLocationEntity> locations = novelAssetService.listLocations(chapter.getProjectId());
+        List<NovelClueEntity> clues = novelAssetService.listClues(chapter.getProjectId());
+
+        NovelGraphPatchModel graphPatch = null;
+        NovelProjectEntity project = novelProjectService.getAvailableProject(chapter.getProjectId());
+
+        if (NovelGenerationProviderEnum.DEEPSEEK.getValue().equals(session.getProvider())
+                || NovelGenerationProviderEnum.TONGYI.getValue().equals(session.getProvider())) {
+            graphPatch = novelLLMService.extractGraphPatch(project, chapter, characters, locations, clues, session.getProvider());
+            if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
+                log.warn("LLM GraphPatch extraction failed or returned empty, fallback to mock. chapterNo={}", chapter.getChapterNo());
+                graphPatch = null;
+            }
+        }
+
+        if (graphPatch == null) {
+            graphPatch = buildGraphPatch(chapter);
+        }
+
+        // 校验 patch：缺必填字段的标 BLOCKED，before值跟图谱不一致的标 CONFLICT
+        novelGraphService.checkBlocked(graphPatch);
+        novelGraphService.validatePatch(graphPatch);
+
         NovelGraphPatchModel inversePatch = buildInversePatch(graphPatch);
 
         chapter.setStatus(NovelChapterStatusEnum.PENDING_GRAPH_CONFIRM.getValue());
@@ -223,7 +367,14 @@ public class NovelWriteService {
     }
 
     /**
-     * 用户确认 GraphPatch 后执行白名单图谱写入，并发布正文。
+     * 用户点了"确认变更"——真正把图谱变更写到 Neo4j 里，同时发布章节。
+     *
+     * 执行顺序：
+     * 1. 从 session 里取出之前生成的变更单（graphPatch + inversePatch）
+     * 2. 只执行用户勾选了的那几条（或者前端传了具体哪些要执行）
+     * 3. NovelGraphService.applyGraphPatch —— 受控 Cypher 写入 Neo4j
+     * 4. 写入变更日志（patch + inversePatch 都存，undo 要用）
+     * 5. 章节状态改为 PUBLISHED
      */
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<NovelChapterVO> confirmPatch(NovelPatchConfirmForm form) {
@@ -250,6 +401,10 @@ public class NovelWriteService {
         if (CollectionUtils.isEmpty(executablePatch.getOperations())) {
             return ResponseDTO.userErrorParam("没有可执行的 GraphPatch 操作");
         }
+
+        // 执行前再校验一遍：防止用户停了太久，图谱已经被别人改过了
+        novelGraphService.validatePatch(executablePatch);
+
         NovelGraphPatchModel executableInversePatch = filterPatch(inversePatch, executablePatch.getOperations().stream()
                 .map(NovelGraphPatchOperationModel::getOperationId)
                 .collect(Collectors.toList()), false);
@@ -329,7 +484,12 @@ public class NovelWriteService {
     }
 
     /**
-     * 撤销最近一次已应用的图谱变更。正文保留，并标记为待同步图谱。
+     * 回滚——把最近一次写进图谱的东西撤销掉。
+     *
+     * 只撤图谱不删正文：
+     * - 先从变更日志里找到最近一条"已执行"的记录
+     * - 把 inversePatch（反向变更单）执行一遍，Neo4j 恢复到变更前的状态
+     * - 章节状态改成 PENDING_GRAPH_UPDATE（正文还在，可以重新发布）
      */
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<NovelUndoVO> undo(NovelUndoForm form) {
@@ -686,14 +846,60 @@ public class NovelWriteService {
         return JSON.parseObject(json, clazz);
     }
 
+    /**
+     * 自动检测现在能用哪个 AI：DeepSeek 不行就通义千问，都没有就 mock。
+     *
+     * 查 t_user_api_key 表，先看 DeepSeek 的 Key 有没有配，再看通义千问。
+     */
+    private String resolveAvailableProvider() {
+        net.lab1024.sa.admin.module.business.novel.domain.entity.UserApiKeyEntity keyEntity =
+                userApiKeyDao.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<net.lab1024.sa.admin.module.business.novel.domain.entity.UserApiKeyEntity>()
+                        .eq(net.lab1024.sa.admin.module.business.novel.domain.entity.UserApiKeyEntity::getUserId, AdminRequestUtil.getRequestUserId())
+                        .last("limit 1"));
+        if (keyEntity != null) {
+            if (isValidKey(keyEntity.getDeepseekKey())) {
+                return NovelGenerationProviderEnum.DEEPSEEK.getValue();
+            }
+            if (isValidKey(keyEntity.getQwenKey())) {
+                return NovelGenerationProviderEnum.TONGYI.getValue();
+            }
+        }
+        return NovelGenerationProviderEnum.MOCK.getValue();
+    }
+
+    /**
+     * 判断一个 API Key 能不能用。
+     *
+     * 先当它是加密的试解密，解出来了就是有效的。
+     * 解不出来但看着像明文（sk-开头 或 含 dashscope）也当有效。
+     */
+    private boolean isValidKey(String encrypted) {
+        if (StringUtils.isBlank(encrypted)) {
+            return false;
+        }
+        String decrypted = apiEncryptService.decrypt(encrypted);
+        if (StringUtils.isNotBlank(decrypted)) {
+            return true;
+        }
+        if (encrypted.startsWith("sk-") || encrypted.contains("dashscope")) {
+            return true;
+        }
+        return false;
+    }
+
+    private String buildPromptSnapshot(NovelProjectEntity project,
+                                        ChapterIntentModel intent,
+                                        ContextPreviewModel contextPreview,
+                                        String provider) {
+        return provider + ":/write " + intent.getChapterNo() + " pov=" + intent.getPov();
+    }
+
     private NovelChapterVO toChapterVO(NovelChapterEntity chapter) {
         return SmartBeanUtil.copy(chapter, NovelChapterVO.class);
     }
 
     /**
-     * 构建本次生成使用的上下文快照。
-     *
-     * M0 先保存可读文本，M1 新接口使用结构化 ContextPreview JSON。
+     * 把角色、地点、线索拼成一段可读文本，降级时用。
      */
     private String buildContextSnapshot(NovelProjectEntity project,
                                         List<NovelCharacterEntity> characters,
@@ -719,9 +925,9 @@ public class NovelWriteService {
         return """
                 # %s
 
-                这是《%s》的第 %d 章 M1 模拟草稿。
-                %s 来到%s，带着一个明确目标：推动剧情向前，同时不丢掉故事最初承诺给读者的期待。当前作品类型是“%s”，本章会围绕安全写作闭环展开。
-                本章显性线索是“%s”。它暂时不会被解决，而是先埋入场景中，方便后续 GraphPatch 流程追踪线索状态。
+                这是《%s》的第 %d 章降级生成内容。
+                %s 来到%s，带着一个明确目标：推动剧情向前，同时不丢掉故事最初承诺给读者的期待。当前作品类型是"%s"，本章会围绕写作闭环展开。
+                本章显性线索是"%s"。它暂时不会被解决，而是先埋入场景中，方便后续追踪线索状态。
                 章节结尾，%s 做出一个看似很小、却无法撤回的选择，为下一章留下继续推进的入口。
                 """.formatted(
                 "第" + chapterNo + "章",

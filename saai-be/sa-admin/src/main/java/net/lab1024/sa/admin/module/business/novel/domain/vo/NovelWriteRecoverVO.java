@@ -7,7 +7,7 @@ import net.lab1024.sa.admin.module.business.novel.domain.model.ContextPreviewMod
 import net.lab1024.sa.admin.module.business.novel.domain.model.NovelGraphPatchModel;
 
 /**
- * M1 写作恢复结果。
+ * 写作恢复结果。
  */
 @Data
 public class NovelWriteRecoverVO {

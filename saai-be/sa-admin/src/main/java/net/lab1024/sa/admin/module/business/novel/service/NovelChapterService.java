@@ -14,9 +14,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
 /**
- * 小说章节服务。
- *
- * M0 只负责章节查询、编号生成和草稿保存；章节审阅、发布和回滚后续再补。
+ * 章节服务——章节查询、编号生成、草稿保存。
  */
 @Service
 public class NovelChapterService {

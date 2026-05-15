@@ -9,9 +9,7 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
- * 用户大模型 API Key 实体。
- *
- * M0 先建表占位；真实保存时必须加密后再落库。
+ * 用户 AI Key 表。存储 DeepSeek 和通义千问的 Key，加密保存。
  */
 @Data
 @TableName("t_user_api_key")

@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * M1 写前上下文预览。
+ * 写作前的上下文预览——让用户看到 AI 即将参考哪些信息。
  */
 @Data
 public class ContextPreviewModel {

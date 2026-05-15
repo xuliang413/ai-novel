@@ -19,9 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 小说项目服务。
- *
- * 项目是 M0 的聚合根：角色、地点、线索、章节都必须归属到一个项目下。
+ * 项目服务——角色、地点、线索、章节都必须归属到一个项目下。
  */
 @Service
 public class NovelProjectService {

@@ -12,18 +12,16 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 小说 Neo4j 初始化器。
+ * Neo4j 初始化器。
  *
- * 应用启动时自动创建 M0 所需的唯一约束，保证本地 Docker、测试环境和部署环境的图谱结构一致。
+ * 启动时自动创建图谱唯一约束，标签只表达实体类型，项目归属统一通过 projectId 隔离。
  */
 @Component
 @Slf4j
 public class NovelNeo4jInitializer {
 
     /**
-     * M0 图谱约束语句。
-     *
-     * 约束遵循技术方案里的图谱隔离原则：标签只表达实体类型，项目归属统一通过 projectId 属性表达。
+     * 图谱约束语句——按方案 §4.2.0 的隔离原则。
      */
     private static final List<String> INIT_CYPHER_LIST = List.of(
             """
@@ -55,9 +53,7 @@ public class NovelNeo4jInitializer {
     private NovelNeo4jProperties properties;
 
     /**
-     * 初始化 M0 图谱约束。
-     *
-     * Neo4j 如果暂时不可用，后端仍允许启动；后续可以通过 /novel/health 明确看到 Neo4j 状态。
+     * 初始化图谱约束。
      */
     @PostConstruct
     public void initSchema() {
@@ -70,9 +66,9 @@ public class NovelNeo4jInitializer {
             for (String cypher : INIT_CYPHER_LIST) {
                 session.run(cypher).consume();
             }
-            log.info("AI 小说 Neo4j M0 图谱约束初始化完成");
+            log.info("Neo4j 图谱约束初始化完成");
         } catch (Exception e) {
-            log.warn("AI 小说 Neo4j M0 图谱约束初始化失败，请检查 Neo4j 服务和账号密码配置：{}", e.getMessage(), e);
+            log.warn("Neo4j 图谱约束初始化失败，请检查 Neo4j 服务和账号密码配置：{}", e.getMessage(), e);
         }
     }
 

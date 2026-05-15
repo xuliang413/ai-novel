@@ -16,9 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * AI 小说项目接口。
- *
- * 项目是 M0 的聚合根，角色、地点、线索、章节都必须挂在项目下。
+ * 项目接口——角色、地点、线索、章节都挂在项目下。
  */
 @RestController
 @RequestMapping("/novel/project")
