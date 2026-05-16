@@ -20,3 +20,35 @@ server:
 spring:
   profiles:
     active: '@profiles.active@'
+
+# ============================================
+# AI小说 LLM 配置 (系统默认值, 用户可在t_user_api_key中覆盖)
+# ============================================
+novel:
+  llm:
+    # 对话模型默认配置 (CHAT)
+    chat:
+      default-url: https://api.deepseek.com
+      default-model: deepseek-chat
+      default-timeout: 60000
+    # 向量模型默认配置 (EMBEDDING)
+    embedding:
+      default-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      default-model: qwen3-embedding
+      default-timeout: 30000
+    # 重排模型默认配置 (RERANK)
+    rerank:
+      default-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      default-model: qwen3-rerank
+      default-timeout: 30000
+
+  # AI小说提示词模板配置 (后续Task使用)
+  prompt:
+    system-template-prefix: "你是一位专业网文作家，请遵循以下规则："
+    user-template-prefix: "请续写以下小说的第{chapterNumber}章："
+
+# Neo4j 图数据库连接配置
+neo4j:
+  uri: bolt://localhost:7687
+  username: neo4j
+  password: password

@@ -1,0 +1,14 @@
+package net.lab1024.sa.admin.module.business.novel.dao;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCharacterEntity;
+import org.apache.ibatis.annotations.Mapper;
+
+/**
+ * 小说角色 DAO
+ *
+ * @Author AI-Novel
+ */
+@Mapper
+public interface NovelCharacterDao extends BaseMapper<NovelCharacterEntity> {
+}

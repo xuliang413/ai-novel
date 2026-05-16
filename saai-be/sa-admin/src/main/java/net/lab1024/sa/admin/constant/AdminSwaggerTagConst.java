@@ -26,6 +26,21 @@ public class AdminSwaggerTagConst extends SwaggerTagConst {
 
         public static final String OA_NOTICE = "OA办公-通知公告";
 
+        // ===== AI小说 =====
+        public static final String NOVEL_USER_API_KEY = "AI小说-API Key配置";
+
+        public static final String NOVEL_PROJECT = "AI小说-项目管理";
+
+        public static final String NOVEL_CHAPTER = "AI小说-章节管理";
+
+        public static final String NOVEL_ASSET = "AI小说-资产管理";
+
+        public static final String NOVEL_WRITE = "AI小说-写作引擎";
+
+        public static final String NOVEL_GRAPH = "AI小说-图谱查询";
+
+        public static final String NOVEL_DASHBOARD = "AI小说-仪表盘";
+
     }
 
 

@@ -12,6 +12,8 @@
 - Neo4j 测试用 mock `org.neo4j.driver.Driver`，不用 Testcontainers
 - 提示词模板放 `application.yaml` 管理，不硬编码在 Service 里
 - 所用内容必须符合《AI小说第一阶段技术方案》一~五章
+- 注释规则：方法注释必须全覆盖、行内注释需要覆盖关键逻辑、字段注释全覆盖。注释需要满足说人话，技术要点到位。特别是枚举类注释还要写清楚用途，注释的目的是便于后期人审阅和维护。、
+- mysql和neo4j都有对应的mcp服务，可以使用
 
 ---
 
@@ -19,23 +21,23 @@
 
 ```
 Phase 1: Foundation
-  MySQL DDL + Neo4j 约束 ──→ 枚举 ──→ Entity + DAO
+  MySQL DDL + Neo4j 约束 ──→ 枚举 ──→ Entity(3a核心+3b关系/系统) + DAO
                                           │
 Phase 2: 基础设施                            │
   LLM 配置（写作+Embedding）  ←──────────────┘
   GraphService（5种Cypher模板+11种节点merge）
          │
 Phase 3: 业务CRUD（Task 6~9 可并行）
-  项目管理 ──→ 资产管理(角色/地点/线索) ──→ 资产管理(物品/事件/金手指/马甲/规则/卷)
-                                      ──→ 角色关系CRUD
-                                      ──→ 章节+细纲
+  项目管理 ──→ 资产管理(7a角色+地点) ──→ 7b(线索+物品+事件) ──→ 7c(金手指/马甲/规则/卷)
+                                                    ──→ 角色关系CRUD
+                                                    ──→ 章节+细纲
          │
 Phase 4: 写作引擎
   上下文检索 ──→ 提示词组装 ──→ LLM Service ──→ 写作Service（状态机+流程编排）
                                                      ──→ 流式写作+WebSocket
          │
 Phase 5: GraphPatch系统
-  GraphPatch模型+映射 ──→ GraphPatch LLM抽取 ──→ 审阅API ──→ 写入+发布+向量化
+  15a(模型+映射) ──→ 15b(LLM抽取) ──→ 审阅API ──→ 写入+发布+向量化
          │
 Phase 6: 辅助
   写后校验  撤销  图谱查询+仪表盘+日志
@@ -76,7 +78,7 @@ Phase 6: 辅助
 | `NovelProjectStatusEnum` | ACTIVE/PAUSED/ARCHIVED |
 | `NovelCharacterRoleEnum` | PROTAGONIST/ANTAGONIST/SUPPORTING/MINOR |
 | `NovelCharacterStatusEnum` | ACTIVE/INACTIVE/DEAD/MISSING/UNKNOWN |
-| `NovelEmotionEnum` | ANGER/FEAR/DETERMINED/DESPAIR/JOY/SADNESS/CALM/SUSPICIOUS/... |
+| `NovelEmotionEnum` | ANGER/FEAR/DETERMINED/DESPAIR/JOY/SADNESS/CALM/SUSPICIOUS/SHAME/PRIDE/HOPE/GRIEF/ANXIETY |
 | `NovelGoalStatusEnum` | IN_PROGRESS/ACHIEVED/ABANDONED/DIVERTED |
 | `NovelClueTypeEnum` | MAIN/SUB/HIDDEN |
 | `NovelClueSubTypeEnum` | PLOT_THREAD/FORESHADOWING |
@@ -111,32 +113,43 @@ Phase 6: 辅助
 
 ---
 
-#### Task 3: Entity + DAO 创建
+#### Task 3a: 核心业务 Entity + DAO
 
-**Description:** 新建所有 Entity（对应 16 张业务表 + 5 张系统表），新建对应 DAO 接口（继承 MyBatis-Plus `BaseMapper`）。每张表一个 Entity + 一个 DAO。
-
-**业务表 Entity（17 个）：**
-`NovelProjectEntity`、`NovelCharacterEntity`、`NovelLocationEntity`、`NovelClueEntity`、`NovelItemEntity`、`NovelEventEntity`、`NovelCheatEntity`、`NovelAliasEntity`、`NovelNarrativeRuleEntity`、`NovelVolumeEntity`、`NovelChapterEntity`、`NovelCharacterRelationEntity`、`NovelCharacterLocationEntity`、`NovelCharacterCheatEntity`、`NovelChapterAppearanceEntity`、`NovelClueAdvanceEntity`、`ChapterOutlineEntity`
-
-**系统表 Entity（5 个，可复用部分旧代码）：**
-`UserApiKeyEntity`、`ChapterGenerationSessionEntity`、`GraphChangeLogEntity`、`WritingLogEntity`、`WritingCalendarEntity`
+**Description:** 新建核心业务表对应的 Entity 和 DAO：`NovelProjectEntity`、`NovelCharacterEntity`、`NovelLocationEntity`、`NovelClueEntity`、`NovelItemEntity`、`NovelEventEntity`、`NovelCheatEntity`、`NovelAliasEntity`、`NovelNarrativeRuleEntity`、`NovelVolumeEntity`、`NovelChapterEntity`、`ChapterOutlineEntity`。每表一个 DAO（继承 `BaseMapper`）。
 
 **Acceptance criteria:**
 - [ ] 所有 Entity 字段 + `@TableName` + `@TableId` 与 DDL 一致
 - [ ] 所有 DAO 继承 `BaseMapper<Entity>` + `@Mapper`
-- [ ] 编译通过 (`mvn compile`)
+- [ ] 编译通过
 
 **Dependencies:** Task 1, 2
 
-**Files to create:** `domain/entity/*.java` (~17 个), `dao/*.java` (~17 个)
+**Files to create:** `domain/entity/*.java` (~12 个), `dao/*.java` (~12 个)
 
-**Scope:** L
+**Scope:** M
+
+---
+
+#### Task 3b: 关系/系统表 Entity + DAO
+
+**Description:** 关系中间表 Entity（`NovelCharacterRelationEntity`、`NovelCharacterLocationEntity`、`NovelCharacterCheatEntity`、`NovelChapterAppearanceEntity`、`NovelClueAdvanceEntity`）+ 系统表 Entity（`ChapterGenerationSessionEntity`、`GraphChangeLogEntity`、`WritingLogEntity`、`WritingCalendarEntity`）。`UserApiKeyEntity` 由 Task 4 负责。
+
+**Acceptance criteria:**
+- [ ] 所有 Entity 字段与 DDL 一致
+- [ ] 所有 DAO 继承 `BaseMapper<Entity>`
+- [ ] 编译通过
+
+**Dependencies:** Task 1, 2
+
+**Files to create:** `domain/entity/*.java` (~9 个), `dao/*.java` (~9 个)
+
+**Scope:** M
 
 ---
 
 ### Checkpoint: Foundation
 - [ ] MySQL DDL + Neo4j 约束可执行
-- [ ] `mvn compile` 通过
+- [ ] `mvn compile` 通过（Entity + 枚举 + DAO）
 
 ---
 
@@ -173,9 +186,9 @@ Phase 6: 辅助
 
 **Dependencies:** Task 3
 
-**Files to create:** `service/NovelGraphService.java`, `test/.../service/NovelGraphServiceTest.java`
+**Files to create:** `service/NovelGraphService.java`, `test/.../service/NovelGraphServiceTest.java`, `resources/dev/application.yaml`（补 Neo4j 连接配置）
 
-**Scope:** L
+**Scope:** L（复杂度驱动，非文件数驱动）
 
 ---
 
@@ -201,31 +214,43 @@ Phase 6: 辅助
 
 ---
 
-#### Task 7a: 资产管理 — 角色/地点/线索
+#### Task 7a: 资产管理 — 角色 + 地点
 
-**Description:** 角色、地点、线索增删改查。创建时同步 Neo4j。管理页只暴露设定属性（动态属性不在 Form 里）。
+**Description:** 角色和地点增删改查。创建时同步 Neo4j。管理页只暴露设定属性。
 
-**Verification:** 三种实体 Create + Query 测试，验证用户隔离
+**Verification:** Create + Query 测试，验证用户隔离
 
 **Dependencies:** Task 5
 
-**Files to create:** `service/NovelAssetService.java`（角色/地点/线索部分）、各 Form/VO、测试
+**Files to create:** `service/NovelAssetService.java`（角色+地点部分），Form/VO，测试
 
 **Scope:** M
 
 ---
 
-#### Task 7b: 资产管理 — 物品/事件/金手指/马甲/叙事规则/卷
+#### Task 7b: 资产管理 — 线索 + 物品 + 事件
 
-**Description:** 六种实体的增删改查，复用 `NovelAssetService`。全部设定属性可改，动态属性不在 Form 里。
+**Description:** 线索、物品、事件的增删改查。线索含完整的设定属性（type/subType/priority/targetChapter/tone 等）。
 
-**Verification:** 六种实体 Create + Query 测试
+**Verification:** 三种实体 Create + Query 测试
 
 **Dependencies:** Task 7a（共用 Service 基架）
 
 **Files:** 补全 `NovelAssetService.java`、各 Form/VO、测试
 
 **Scope:** M
+
+---
+
+#### Task 7c: 资产管理 — 金手指/马甲/叙事规则/卷
+
+**Description:** 四种实体的增删改查，复用 `NovelAssetService`。
+
+**Dependencies:** Task 7a
+
+**Files:** 补全 `NovelAssetService.java`、各 Form/VO、测试
+
+**Scope:** S
 
 ---
 
@@ -270,7 +295,7 @@ Phase 6: 辅助
 
 **Description:** 实现三阶段候选池收窄 + Token 计数 + 各种兜底。
 
-- 阶段一：粗筛 7 种来源（卷概要/上章/线索/细纲匹配/候选地点/第1章兜底）
+- 阶段一：粗筛 7 种来源（卷概要/上章/POV当前位置/线索/细纲匹配/候选地点/第1章兜底）
 - 阶段二：过滤（死者/路人）+ 排序（POV>上章>驱动线索>同地点>其他）
 - 阶段三：按 Token 预算动态分层展示（完整卡→简短→丢弃）
 - 兜底：第 1 章候选池空→全量；POV 空→主角→PROTAGONIST；无 CURRENTLY_AT→跳过地点；无卷→跳过卷概要
@@ -325,7 +350,7 @@ Phase 6: 辅助
 
 **Verification:** Mock 全流程可跑通，状态机正确
 
-**Dependencies:** Task 9, 10, 11, 12
+**Dependencies:** Task 7a, 9, 10, 11, 12
 
 **Files to create:** `service/NovelWriteService.java`, `controller/NovelWriteController.java`, Form/VO, `test/.../NovelWriteServiceTest.java`
 
@@ -480,11 +505,13 @@ Phase 6: 辅助
 |------|:-----:|------|:-----:|------|:-----:|
 | 1 DDL | S | 8 角色关系 | S | 15a Patch模型 | M |
 | 2 枚举 | M | 9 章节+细纲 | M | 15b Patch抽取 | M |
-| 3 Entity+DAO | L | 10 上下文检索 | L | 16 审阅API | S |
-| 4 LLM配置 | M | 11 提示词 | S | 17 写入+发布 | M |
-| 5 GraphService | L | 12 LLM | M | 18 写后校验 | S |
-| 6 项目管理 | M | 13 写作 | L | 19 撤销 | S |
-| 7a 资产(角色/地点/线索) | M | 14 流式+WS | M | 20 图谱查询 | M |
-| 7b 资产(物品/事件/金手指/马甲/规则/卷) | M | | | | |
+| 3a 核心Entity+DAO | M | 10 上下文检索 | L | 16 审阅API | S |
+| 3b 关系/系统Entity+DAO | M | 11 提示词 | S | 17 写入+发布 | M |
+| 4 LLM配置 | M | 12 LLM | M | 18 写后校验 | S |
+| 5 GraphService | L | 13 写作 | L | 19 撤销 | S |
+| 6 项目管理 | M | 14 流式+WS | M | 20 图谱查询 | M |
+| 7a 资产(角色+地点) | M | | | | |
+| 7b 资产(线索+物品+事件) | M | | | | |
+| 7c 资产(金手指/马甲/规则/卷) | S | | | | |
 
-**22 tasks, 6 phases, 4 checkpoints, 0 XL.**
+**24 tasks, 6 phases, 4 checkpoints, 0 XL.**
