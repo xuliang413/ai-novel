@@ -22,15 +22,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 写作流式 WebSocket Handler。
+ * 写作流式 WebSocket Handler（v2 —— 统一事件协议）
  *
- * 协议：
  * 连接：ws://host/ws/novel/write?token=xxx
  * 客户端→服务端：{"action":"start","projectId":2,...}  启动生成
  * 客户端→服务端：{"action":"cancel"}                     取消生成
- * 服务端→客户端：{"event":"token","data":"..."}          逐字推送
- * 服务端→客户端：{"event":"done","data":{...}}           生成完成
- * 服务端→客户端：{"event":"error","data":"..."}          出错
+ * 客户端→服务端：{"action":"recover","sessionId":42}     断线重连恢复
+ * 客户端→服务端：{"action":"ping"}                       心跳
+ * 服务端→客户端统一为 NovelWebSocketEventVO，eventType 包括：
+ * token | contentReady | canceled | failed | error | heartbeat 等。
+ * 每个事件固定字段：eventType, sessionId, chapterId, timestamp, payload, message
  */
 @Slf4j
 @Component
@@ -48,6 +49,11 @@ public class NovelWriteWebSocketHandler extends TextWebSocketHandler {
      * 已鉴权的用户 ID 缓存。key = WebSocket session id, value = userId
      */
     private final Map<String, Long> authenticatedUsers = new ConcurrentHashMap<>();
+
+    /**
+     * 写作会话 ID 映射。key = wsSessionId, value = 当前写作 sessionId
+     */
+    private final Map<String, Long> activeWriteSessions = new ConcurrentHashMap<>();
 
     public NovelWriteWebSocketHandler(NovelWriteService novelWriteService) {
         this.novelWriteService = novelWriteService;
@@ -109,49 +115,48 @@ public class NovelWriteWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void processMessage(WebSocketSession session, String payload) {
-        log.info("WebSocket 收到消息：sessionId={}, payload={}", session.getId(),
+        log.info("WebSocket 收到消息：wsSessionId={}, payload={}", session.getId(),
                 payload.length() > 200 ? payload.substring(0, 200) + "..." : payload);
 
         try {
             JSONObject json = JSON.parseObject(payload);
+            String action = json.getString("action");
 
-            if ("cancel".equals(json.getString("action"))) {
-                AtomicBoolean cancel = cancelFlags.get(session.getId());
-                if (cancel != null) {
-                    cancel.set(true);
-                }
-                sendJson(session, "event", "cancelled", "data", "已取消");
+            if ("ping".equals(action)) {
+                sendEventQuiet(session, NovelWebSocketEventVO.heartbeat());
                 return;
             }
 
-            if ("start".equals(json.getString("action"))) {
+            if ("cancel".equals(action)) {
+                cancelGeneration(session);
+                return;
+            }
+
+            if ("start".equals(action)) {
                 if (cancelFlags.containsKey(session.getId())) {
-                    sendJson(session, "event", "error", "data", "已有生成任务在进行中");
+                    sendEventQuiet(session, NovelWebSocketEventVO.error(null, "已有生成任务在进行中"));
                     return;
                 }
                 startGeneration(session, json);
                 return;
             }
 
-            sendJson(session, "event", "error", "data", "未知 action: " + json.getString("action"));
+            if ("recover".equals(action)) {
+                recoverSession(session, json);
+                return;
+            }
+
+            sendEventQuiet(session, NovelWebSocketEventVO.error(null, "未知 action: " + action));
         } catch (Exception e) {
             log.error("WebSocket 消息处理失败", e);
-            try {
-                sendJson(session, "event", "error", "data", "消息格式错误: " + e.getMessage());
-            } catch (IOException ex) {
-                log.error("发送错误响应失败", ex);
-            }
+            sendEventQuiet(session, NovelWebSocketEventVO.error(null, "消息格式错误: " + e.getMessage()));
         }
     }
 
     private void startGeneration(WebSocketSession session, JSONObject json) {
         NovelWriteStartForm form = json.toJavaObject(NovelWriteStartForm.class);
         if (form == null || form.getProjectId() == null) {
-            try {
-                sendJson(session, "event", "error", "data", "缺少 projectId");
-            } catch (IOException e) {
-                log.error("WebSocket 发送错误失败", e);
-            }
+            sendEventQuiet(session, NovelWebSocketEventVO.error(null, "缺少 projectId"));
             return;
         }
 
@@ -161,60 +166,77 @@ public class NovelWriteWebSocketHandler extends TextWebSocketHandler {
         novelWriteService.startStream(form,
                 token -> {
                     if (cancelFlag.get()) return;
-                    try {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(
-                                    JSON.toJSONString(Map.of("event", "token", "data", token))));
-                        }
-                    } catch (IOException e) {
-                        log.warn("WebSocket 推送 token 失败：sessionId={}", session.getId());
-                        cancelFlag.set(true);
-                    }
+                    sendEventQuiet(session, NovelWebSocketEventVO.token(null, token));
                 },
                 result -> {
-                    cancelFlags.remove(session.getId());
-                    try {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(
-                                    JSON.toJSONString(Map.of("event", "done", "data", result))));
-                        }
-                    } catch (IOException e) {
-                        log.error("WebSocket 推送 done 失败", e);
-                    }
+                    Long writeSessionId = result.getSessionId();
+                    Long chapterId = result.getChapter() != null ? result.getChapter().getChapterId() : null;
+                    activeWriteSessions.put(session.getId(), writeSessionId);
+                    cleanup(session);
+                    sendEventQuiet(session, NovelWebSocketEventVO.done(writeSessionId, chapterId, result));
                 },
                 errorMsg -> {
-                    cancelFlags.remove(session.getId());
-                    try {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(
-                                    JSON.toJSONString(Map.of("event", "error", "data", errorMsg))));
-                        }
-                    } catch (IOException e) {
-                        log.error("WebSocket 推送 error 失败", e);
-                    }
+                    cleanup(session);
+                    sendEventQuiet(session, NovelWebSocketEventVO.error(null, errorMsg));
                 });
+    }
+
+    private void cancelGeneration(WebSocketSession session) {
+        AtomicBoolean cancel = cancelFlags.get(session.getId());
+        if (cancel != null) {
+            cancel.set(true);
+        }
+        Long writeSessionId = activeWriteSessions.get(session.getId());
+        sendEventQuiet(session, NovelWebSocketEventVO.cancelled(writeSessionId));
+    }
+
+    private void recoverSession(WebSocketSession session, JSONObject json) {
+        Long recoverSessionId = json.getLong("sessionId");
+        if (recoverSessionId == null) {
+            sendEventQuiet(session, NovelWebSocketEventVO.error(null, "缺少 sessionId 参数"));
+            return;
+        }
+        NovelWriteDraftVO result = novelWriteService.recoverStreamSession(recoverSessionId);
+        if (result == null) {
+            sendEventQuiet(session, NovelWebSocketEventVO.error(recoverSessionId, "会话不存在或已被清理"));
+            return;
+        }
+        Long chapterId = result.getChapter() != null ? result.getChapter().getChapterId() : null;
+        sendEventQuiet(session, NovelWebSocketEventVO.done(recoverSessionId, chapterId, result));
+    }
+
+    private void cleanup(WebSocketSession session) {
+        cancelFlags.remove(session.getId());
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         cancelFlags.remove(session.getId());
         authenticatedUsers.remove(session.getId());
-        log.info("WebSocket 写作连接已关闭：sessionId={}, status={}", session.getId(), status);
+        activeWriteSessions.remove(session.getId());
+        log.info("WebSocket 写作连接已关闭：wsSessionId={}, status={}", session.getId(), status);
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.error("WebSocket 传输错误：sessionId={}", session.getId(), exception);
+        log.error("WebSocket 传输错误：wsSessionId={}", session.getId(), exception);
         cancelFlags.remove(session.getId());
         authenticatedUsers.remove(session.getId());
+        activeWriteSessions.remove(session.getId());
     }
 
-    private void sendJson(WebSocketSession session, String... keyValues) throws IOException {
-        Map<String, Object> map = new java.util.LinkedHashMap<>();
-        for (int i = 0; i < keyValues.length; i += 2) {
-            map.put(keyValues[i], keyValues[i + 1]);
+    private void sendEvent(WebSocketSession session, NovelWebSocketEventVO event) throws IOException {
+        if (session.isOpen()) {
+            session.sendMessage(new TextMessage(JSON.toJSONString(event)));
         }
-        session.sendMessage(new TextMessage(JSON.toJSONString(map)));
+    }
+
+    private void sendEventQuiet(WebSocketSession session, NovelWebSocketEventVO event) {
+        try {
+            sendEvent(session, event);
+        } catch (IOException e) {
+            log.warn("WebSocket 推送事件失败：wsSessionId={}, eventType={}", session.getId(), event.getEventType());
+        }
     }
 
     private void close(WebSocketSession session, CloseStatus status, String reason) {

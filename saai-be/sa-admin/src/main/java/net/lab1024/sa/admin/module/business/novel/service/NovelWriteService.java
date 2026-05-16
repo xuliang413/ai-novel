@@ -142,7 +142,18 @@ public class NovelWriteService {
         ChapterIntentModel intent = buildChapterIntent(form, project, chapterNo, characters, locations, clues);
         ContextPreviewModel contextPreview = buildContextPreview(project, chapterNo, intent, characters, locations, clues);
 
-        // provider 是本次写作的“发动机”：优先真实模型，拿不到可用 Key 就走 MOCK，保证功能链路不中断。
+        // 【会话先落库】在调用 LLM 之前就创建 session，状态置为 GENERATING。
+        // 这样即使生成中途崩溃，前端刷新后也能查到正在生成的会话。
+        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
+        session.setProjectId(form.getProjectId());
+        session.setChapterNo(chapterNo);
+        session.setStatus(NovelGenerationStatusEnum.GENERATING.getValue());
+        session.setIntentJson(JSON.toJSONString(intent));
+        session.setContextSnapshot(JSON.toJSONString(contextPreview));
+        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
+        generationSessionDao.insert(session);
+
+        // provider 是本次写作的"发动机"：优先真实模型，拿不到可用 Key 就走 MOCK，保证功能链路不中断。
         String provider = resolveAvailableProvider();
         String title;
         String summary;
@@ -178,18 +189,13 @@ public class NovelWriteService {
         ContentQualityCheckModel qualityCheck = buildQualityCheck(content, intent);
 
         // session 是写作状态机的核心记录：后面恢复、返回上一步、确认图谱、撤销都靠它串起来。
-        ChapterGenerationSessionEntity session = new ChapterGenerationSessionEntity();
-        session.setProjectId(form.getProjectId());
-        session.setChapterNo(chapterNo);
+        // 此时 session 已经在前面的【会话先落库】步骤中插入，这里更新生成结果。
         session.setProvider(provider);
         session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
         session.setPromptSnapshot(promptSnapshot);
-        session.setIntentJson(JSON.toJSONString(intent));
-        session.setContextSnapshot(JSON.toJSONString(contextPreview));
         session.setContentReviewJson(JSON.toJSONString(qualityCheck));
         session.setResultExcerpt(StringUtils.abbreviate(content, 500));
-        session.setCreateUserId(AdminRequestUtil.getRequestUserId());
-        generationSessionDao.insert(session);
+        generationSessionDao.updateById(session);
 
         // 章节先以 DRAFT 落库，只有 GraphPatch 确认成功后才会变 PUBLISHED。
         NovelChapterEntity chapter = saveDraftChapter(form.getProjectId(), chapterNo, title, summary, content, session.getSessionId());
@@ -335,6 +341,10 @@ public class NovelWriteService {
             return ResponseDTO.userErrorParam("章节不存在");
         }
 
+        if (StringUtils.isNotBlank(form.getTitle())) {
+            // 用户可能在审阅页改过标题；标题也要同步更新到章节。
+            chapter.setTitle(form.getTitle());
+        }
         if (StringUtils.isNotBlank(form.getContent())) {
             // 用户可能在审阅页改过正文；GraphPatch 必须基于最终审阅内容生成。
             chapter.setContent(form.getContent());
@@ -419,6 +429,44 @@ public class NovelWriteService {
         NovelGraphPatchModel inversePatch = parse(session.getInversePatchJson(), NovelGraphPatchModel.class);
         if (graphPatch == null || inversePatch == null) {
             return ResponseDTO.userErrorParam("待确认 GraphPatch 不存在");
+        }
+
+        // 幂等保护：同一批次不允许重复执行。graph_change_log 里有同 batchId 的已执行记录
+        // 直接返回"已执行"而非重复写 Neo4j，防止网络重试造成图谱脏数据。
+        String batchId = graphPatch.getOperationBatchId();
+        if (StringUtils.isNotBlank(batchId)) {
+            GraphChangeLogEntity existingLog = graphChangeLogDao.selectOne(new LambdaQueryWrapper<GraphChangeLogEntity>()
+                    .eq(GraphChangeLogEntity::getOperationBatchId, batchId)
+                    .eq(GraphChangeLogEntity::getStatus, NovelGraphChangeStatusEnum.APPLIED.getValue()));
+            if (existingLog != null) {
+                log.info("GraphPatch 批次 {} 已执行，跳过重复确认", batchId);
+                return ResponseDTO.ok(toChapterVO(chapter));
+            }
+        }
+
+        // 冲突解决：用户在前端对每条 CONFLICT 操作选了 SKIP / FORCE / REVIEW
+        // REVIEW=整体回退，SKIP=跳过此操作，FORCE=忽略冲突继续执行
+        java.util.Map<String, String> resolutions = form.getConflictResolutions();
+        if (resolutions != null) {
+            for (java.util.Map.Entry<String, String> entry : resolutions.entrySet()) {
+                if ("REVIEW".equals(entry.getValue())) {
+                    // 用户选择回退——重置会话状态到正文审阅
+                    session.setStatus(NovelGenerationStatusEnum.CONTENT_REVIEW.getValue());
+                    session.setGraphPatchJson(null);
+                    session.setInversePatchJson(null);
+                    generationSessionDao.updateById(session);
+                    return ResponseDTO.userErrorParam("已回退到正文审阅，请修改后重新提交");
+                }
+            }
+            for (NovelGraphPatchOperationModel op : graphPatch.getOperations()) {
+                String resolution = resolutions.get(op.getOperationId());
+                if ("SKIP".equals(resolution)) {
+                    op.setSelected(false);
+                    op.setValidationStatus("SKIPPED");
+                } else if ("FORCE".equals(resolution) && "CONFLICT".equals(op.getValidationStatus())) {
+                    op.setValidationStatus("READY");
+                }
+            }
         }
 
         // 前端传 operationIds 时按用户选择执行；没传时只执行默认勾选的安全项。
@@ -523,6 +571,42 @@ public class NovelWriteService {
             return ResponseDTO.userErrorParam("没有可恢复的写作会话");
         }
         return ResponseDTO.ok(buildRecoverVO(session));
+    }
+
+    /**
+     * 按 sessionId 查询会话的完整写作结果，供 WebSocket 断线重连恢复使用。
+     *
+     * 前端断开 WebSocket 重连后，如果之前有一个正在生成的会话，
+     * 可以通过 sessionId 查出当前状态和已生成的内容，避免"断了就白生成"。
+     */
+    public NovelWriteDraftVO recoverStreamSession(Long sessionId) {
+        ChapterGenerationSessionEntity session = generationSessionDao.selectById(sessionId);
+        if (session == null) return null;
+
+        NovelChapterEntity chapter = novelChapterService.getById(session.getChapterId());
+        if (chapter == null) return null;
+
+        ChapterIntentModel intent = null;
+        ContextPreviewModel contextPreview = null;
+        if (session.getIntentJson() != null) {
+            intent = parse(session.getIntentJson(), ChapterIntentModel.class);
+        }
+        if (session.getContextSnapshot() != null) {
+            contextPreview = parse(session.getContextSnapshot(), ContextPreviewModel.class);
+        }
+        ContentQualityCheckModel qualityCheck = null;
+        if (session.getContentReviewJson() != null) {
+            qualityCheck = parse(session.getContentReviewJson(), ContentQualityCheckModel.class);
+        }
+
+        NovelWriteDraftVO vo = new NovelWriteDraftVO();
+        vo.setSessionId(session.getSessionId());
+        vo.setSessionStatus(session.getStatus());
+        vo.setChapter(toChapterVO(chapter));
+        vo.setChapterIntent(intent);
+        vo.setContextPreview(contextPreview);
+        vo.setQualityCheck(qualityCheck);
+        return vo;
     }
 
     /**

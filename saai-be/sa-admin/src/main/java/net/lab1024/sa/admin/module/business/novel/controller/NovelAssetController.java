@@ -14,15 +14,25 @@ import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelLocationEnt
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelNarrativeRuleEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelVolumeEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAliasAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAliasUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAssetQueryForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCheatAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCheatUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCharacterAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCharacterUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelClueAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelClueUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelEventAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelEventUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelIdForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelItemAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelItemUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelLocationAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelLocationUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelNarrativeRuleAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelNarrativeRuleUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelVolumeAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelVolumeUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.service.NovelAssetService;
 import net.lab1024.sa.base.common.domain.PageResult;
 import net.lab1024.sa.base.common.domain.ResponseDTO;
@@ -157,5 +167,173 @@ public class NovelAssetController {
     @PostMapping("/rule/query")
     public ResponseDTO<PageResult<NovelNarrativeRuleEntity>> queryNarrativeRule(@RequestBody @Valid NovelAssetQueryForm queryForm) {
         return novelAssetService.queryNarrativeRule(queryForm);
+    }
+
+    // ==================== 资产详情（单条查询） ====================
+
+    @Operation(summary = "查询角色详情")
+    @PostMapping("/character/detail")
+    public ResponseDTO<NovelCharacterEntity> characterDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getCharacterDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询地点详情")
+    @PostMapping("/location/detail")
+    public ResponseDTO<NovelLocationEntity> locationDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getLocationDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询线索详情")
+    @PostMapping("/clue/detail")
+    public ResponseDTO<NovelClueEntity> clueDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getClueDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询卷详情")
+    @PostMapping("/volume/detail")
+    public ResponseDTO<NovelVolumeEntity> volumeDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getVolumeDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询物品详情")
+    @PostMapping("/item/detail")
+    public ResponseDTO<NovelItemEntity> itemDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getItemDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询事件详情")
+    @PostMapping("/event/detail")
+    public ResponseDTO<NovelEventEntity> eventDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getEventDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询金手指详情")
+    @PostMapping("/cheat/detail")
+    public ResponseDTO<NovelCheatEntity> cheatDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getCheatDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询马甲详情")
+    @PostMapping("/alias/detail")
+    public ResponseDTO<NovelAliasEntity> aliasDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getAliasDetail(form.getId()));
+    }
+
+    @Operation(summary = "查询叙事规则详情")
+    @PostMapping("/rule/detail")
+    public ResponseDTO<NovelNarrativeRuleEntity> narrativeRuleDetail(@RequestBody @Valid NovelIdForm form) {
+        return ResponseDTO.ok(novelAssetService.getNarrativeRuleDetail(form.getId()));
+    }
+
+    // ==================== 资产编辑 ====================
+
+    @Operation(summary = "编辑角色")
+    @PostMapping("/character/update")
+    public ResponseDTO<Boolean> updateCharacter(@RequestBody @Valid NovelCharacterUpdateForm form) {
+        return novelAssetService.updateCharacter(form);
+    }
+
+    @Operation(summary = "编辑地点")
+    @PostMapping("/location/update")
+    public ResponseDTO<Boolean> updateLocation(@RequestBody @Valid NovelLocationUpdateForm form) {
+        return novelAssetService.updateLocation(form);
+    }
+
+    @Operation(summary = "编辑线索")
+    @PostMapping("/clue/update")
+    public ResponseDTO<Boolean> updateClue(@RequestBody @Valid NovelClueUpdateForm form) {
+        return novelAssetService.updateClue(form);
+    }
+
+    @Operation(summary = "编辑卷")
+    @PostMapping("/volume/update")
+    public ResponseDTO<Boolean> updateVolume(@RequestBody @Valid NovelVolumeUpdateForm form) {
+        return novelAssetService.updateVolume(form);
+    }
+
+    @Operation(summary = "编辑物品")
+    @PostMapping("/item/update")
+    public ResponseDTO<Boolean> updateItem(@RequestBody @Valid NovelItemUpdateForm form) {
+        return novelAssetService.updateItem(form);
+    }
+
+    @Operation(summary = "编辑事件")
+    @PostMapping("/event/update")
+    public ResponseDTO<Boolean> updateEvent(@RequestBody @Valid NovelEventUpdateForm form) {
+        return novelAssetService.updateEvent(form);
+    }
+
+    @Operation(summary = "编辑金手指")
+    @PostMapping("/cheat/update")
+    public ResponseDTO<Boolean> updateCheat(@RequestBody @Valid NovelCheatUpdateForm form) {
+        return novelAssetService.updateCheat(form);
+    }
+
+    @Operation(summary = "编辑马甲")
+    @PostMapping("/alias/update")
+    public ResponseDTO<Boolean> updateAlias(@RequestBody @Valid NovelAliasUpdateForm form) {
+        return novelAssetService.updateAlias(form);
+    }
+
+    @Operation(summary = "编辑叙事规则")
+    @PostMapping("/rule/update")
+    public ResponseDTO<Boolean> updateNarrativeRule(@RequestBody @Valid NovelNarrativeRuleUpdateForm form) {
+        return novelAssetService.updateNarrativeRule(form);
+    }
+
+    // ==================== 资产归档（软删除） ====================
+
+    @Operation(summary = "归档角色")
+    @PostMapping("/character/archive")
+    public ResponseDTO<Boolean> archiveCharacter(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveCharacter(form.getId());
+    }
+
+    @Operation(summary = "归档地点")
+    @PostMapping("/location/archive")
+    public ResponseDTO<Boolean> archiveLocation(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveLocation(form.getId());
+    }
+
+    @Operation(summary = "归档线索")
+    @PostMapping("/clue/archive")
+    public ResponseDTO<Boolean> archiveClue(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveClue(form.getId());
+    }
+
+    @Operation(summary = "归档卷")
+    @PostMapping("/volume/archive")
+    public ResponseDTO<Boolean> archiveVolume(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveVolume(form.getId());
+    }
+
+    @Operation(summary = "归档物品")
+    @PostMapping("/item/archive")
+    public ResponseDTO<Boolean> archiveItem(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveItem(form.getId());
+    }
+
+    @Operation(summary = "归档事件")
+    @PostMapping("/event/archive")
+    public ResponseDTO<Boolean> archiveEvent(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveEvent(form.getId());
+    }
+
+    @Operation(summary = "归档金手指")
+    @PostMapping("/cheat/archive")
+    public ResponseDTO<Boolean> archiveCheat(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveCheat(form.getId());
+    }
+
+    @Operation(summary = "归档马甲")
+    @PostMapping("/alias/archive")
+    public ResponseDTO<Boolean> archiveAlias(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveAlias(form.getId());
+    }
+
+    @Operation(summary = "归档叙事规则")
+    @PostMapping("/rule/archive")
+    public ResponseDTO<Boolean> archiveNarrativeRule(@RequestBody @Valid NovelIdForm form) {
+        return novelAssetService.archiveNarrativeRule(form.getId());
     }
 }

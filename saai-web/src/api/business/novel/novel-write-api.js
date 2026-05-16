@@ -24,4 +24,8 @@ export const novelWriteApi = {
   undo: (param) => {
     return postRequest('/novel/write/undo', param);
   },
+
+  startStream: () => {
+    return postRequest('/novel/write/start/stream');
+  },
 };

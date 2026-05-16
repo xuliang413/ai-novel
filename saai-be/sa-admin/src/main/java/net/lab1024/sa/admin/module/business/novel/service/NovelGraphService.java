@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphNodeEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphPropertyEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphRelationEnum;
+import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphPatchOperationTypeEnum;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelAliasEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelCheatEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelChapterEntity;
@@ -18,6 +19,7 @@ import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelProjectEnti
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelVolumeEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.model.NovelGraphPatchModel;
 import net.lab1024.sa.admin.module.business.novel.domain.model.NovelGraphPatchOperationModel;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelGraphPanelVO;
 import org.apache.commons.collections4.CollectionUtils;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.Session;
@@ -570,6 +572,17 @@ public class NovelGraphService {
                 if (chapter.getChapterNo() != null && chapter.getChapterNo() > 1) {
                     linkPrevious(tx, chapter.getProjectId(), chapter.getChapterNo());
                 }
+                // 有卷归属时建立 Volume -CONTAINS-> Chapter
+                if (chapter.getVolumeId() != null) {
+                    tx.run("MATCH (v:Volume {projectId: $pid, mysqlId: $vid}) "
+                                    + "MATCH (c:Chapter {projectId: $pid, number: $cno}) "
+                                    + "MERGE (v)-[r:CONTAINS {projectId: $pid}]->(c) "
+                                    + "ON CREATE SET r.createdAt = datetime() "
+                                    + "SET r.updatedAt = datetime()",
+                            Values.parameters("pid", chapter.getProjectId(),
+                                    "vid", chapter.getVolumeId(),
+                                    "cno", chapter.getChapterNo()));
+                }
                 return null;
             });
         }
@@ -699,6 +712,37 @@ public class NovelGraphService {
                     && (op.getTargetName() == null || op.getToName() == null)) {
                 op.setValidationStatus("BLOCKED");
                 op.setReason("关系操作缺少 targetName 或 toName");
+            }
+        }
+    }
+
+    /**
+     * 为每条操作分配风险等级。
+     *
+     * 从 NovelGraphPatchOperationTypeEnum 查找对应操作类型的 riskLevel，
+     * 写入 op.riskLevel 供前端默认勾选策略使用。
+     * 未知操作类型默认标为 HIGH（最保守策略），避免漏审高风险操作。
+     */
+    public void assignRiskLevels(NovelGraphPatchModel graphPatch) {
+        if (graphPatch == null || CollectionUtils.isEmpty(graphPatch.getOperations())) {
+            return;
+        }
+        for (NovelGraphPatchOperationModel op : graphPatch.getOperations()) {
+            if (op.getOperationType() == null) {
+                op.setRiskLevel("HIGH");
+                continue;
+            }
+            NovelGraphPatchOperationTypeEnum typeEnum = null;
+            for (NovelGraphPatchOperationTypeEnum e : NovelGraphPatchOperationTypeEnum.values()) {
+                if (e.getValue().equals(op.getOperationType())) {
+                    typeEnum = e;
+                    break;
+                }
+            }
+            if (typeEnum != null) {
+                op.setRiskLevel(typeEnum.getRiskLevel().getValue());
+            } else {
+                op.setRiskLevel("HIGH");
             }
         }
     }
@@ -1471,5 +1515,345 @@ public class NovelGraphService {
 
     private String property(NovelGraphPropertyEnum propertyEnum) {
         return propertyEnum.key();
+    }
+
+    /**
+     * 图谱健康检查——统计 Neo4j 中各节点的数量，用于检测是否有丢数据。
+     * 返回 { "Project": 3, "Character": 45, ... }
+     */
+    public java.util.Map<String, Long> healthCheck(Long projectId) {
+        java.util.Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        try (Session session = novelNeo4jDriver.session()) {
+            for (NovelGraphNodeEnum nodeEnum : NovelGraphNodeEnum.values()) {
+                String cypher = "MATCH (n:" + nodeEnum.label() + " {projectId: $pid}) RETURN count(n) AS cnt";
+                long cnt = session.run(cypher, Values.parameters("pid", projectId)).single().get("cnt").asLong();
+                counts.put(nodeEnum.label(), cnt);
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * 角色关系图 —— 返回某个项目下所有角色之间的社交关系
+     *
+     * 查询策略：先查出所有角色节点作为 nodes，再查所有连接它们的 KNOWS/LOVES/HATES/
+     * IS_FAMILY_OF 关系作为 edges。这样前端画出的是一张以角色为圆心的社交网络图。
+     *
+     * 使用 NovelGraphPanelVO 统一结构返回 nodes + edges + groups + legends。
+     * groups = NovelGraphPanelVO.defaultGroups() 提供统一的颜色/形状约定。
+     */
+    public NovelGraphPanelVO queryCharacterRelationGraph(Long projectId) {
+        NovelGraphPanelVO panel = NovelGraphPanelVO.builder()
+                .graphType("character_relation")
+                .projectId(projectId)
+                .groups(NovelGraphPanelVO.defaultGroups())
+                .warnings(new java.util.ArrayList<>())
+                .build();
+
+        java.util.List<NovelGraphPanelVO.GraphNode> nodes = new java.util.ArrayList<>();
+        java.util.List<NovelGraphPanelVO.GraphEdge> edges = new java.util.ArrayList<>();
+
+        try (Session session = novelNeo4jDriver.session()) {
+            // 查出所有角色节点
+            var charResult = session.run(
+                    "MATCH (c:Character {projectId: $pid}) WHERE c.archived IS NULL OR NOT c.archived "
+                            + "RETURN c.mysqlId AS mysqlId, c.name AS name, c.status AS status, c.summary AS summary",
+                    Values.parameters("pid", projectId));
+            while (charResult.hasNext()) {
+                var record = charResult.next();
+                NovelGraphPanelVO.GraphNode node = NovelGraphPanelVO.GraphNode.of(
+                        "Character", record.get("mysqlId").asLong(),
+                        record.get("name").asString(""), 0);
+                node.getProperties().put("status", record.get("status").asString(""));
+                node.getProperties().put("summary", record.get("summary").asString(""));
+                nodes.add(node);
+            }
+
+            // 查出所有角色间的关系
+            String[] relationTypes = {"KNOWS", "LOVES", "HATES", "IS_FAMILY_OF"};
+            for (String relType : relationTypes) {
+                var relResult = session.run(
+                        "MATCH (a:Character {projectId: $pid})-[r:" + relType + " {projectId: $pid}]->(b:Character {projectId: $pid}) "
+                                + "RETURN a.mysqlId AS sourceId, b.mysqlId AS targetId, r.description AS description",
+                        Values.parameters("pid", projectId));
+                while (relResult.hasNext()) {
+                    var record = relResult.next();
+                    NovelGraphPanelVO.GraphEdge edge = NovelGraphPanelVO.GraphEdge.builder()
+                            .source("Character_" + record.get("sourceId").asLong())
+                            .target("Character_" + record.get("targetId").asLong())
+                            .label(relType)
+                            .properties(new java.util.LinkedHashMap<>())
+                            .build();
+                    String desc = record.get("description").asString(null);
+                    if (desc != null) {
+                        edge.getProperties().put("description", desc);
+                    }
+                    edges.add(edge);
+                }
+            }
+        }
+
+        panel.setNodes(nodes);
+        panel.setEdges(edges);
+        panel.setLegends(buildEdgeLegends(new String[]{"KNOWS", "LOVES", "HATES", "IS_FAMILY_OF"}));
+        return panel;
+    }
+
+    /**
+     * 线索推进图 —— 为每条线索展示哪些章节推进了它
+     *
+     * 节点：Clue + Chapter
+     * 边：ADVANCES（Chapter → Clue）
+     *
+     * 作者可以通过这张图看到每条主/支线的推进节奏：有没有线索搁置了很久没动。
+     */
+    public NovelGraphPanelVO queryClueAdvancementGraph(Long projectId) {
+        NovelGraphPanelVO panel = NovelGraphPanelVO.builder()
+                .graphType("clue_advancement")
+                .projectId(projectId)
+                .groups(NovelGraphPanelVO.defaultGroups())
+                .warnings(new java.util.ArrayList<>())
+                .build();
+
+        java.util.List<NovelGraphPanelVO.GraphNode> nodes = new java.util.ArrayList<>();
+        java.util.List<NovelGraphPanelVO.GraphEdge> edges = new java.util.ArrayList<>();
+
+        try (Session session = novelNeo4jDriver.session()) {
+            // 线索节点（group=2 绿色三角）
+            var clueResult = session.run(
+                    "MATCH (cl:Clue {projectId: $pid}) WHERE cl.archived IS NULL OR NOT cl.archived "
+                            + "RETURN cl.mysqlId AS mysqlId, cl.name AS name, cl.status AS status, cl.summary AS summary",
+                    Values.parameters("pid", projectId));
+            while (clueResult.hasNext()) {
+                var record = clueResult.next();
+                NovelGraphPanelVO.GraphNode node = NovelGraphPanelVO.GraphNode.of(
+                        "Clue", record.get("mysqlId").asLong(),
+                        record.get("name").asString(""), 2);
+                node.getProperties().put("status", record.get("status").asString(""));
+                node.getProperties().put("summary", record.get("summary").asString(""));
+                nodes.add(node);
+            }
+
+            // 章节节点（group=3 紫色菱形）—— 只要跟线索有推进关系的
+            var chResult = session.run(
+                    "MATCH (ch:Chapter {projectId: $pid})-[r:ADVANCES {projectId: $pid}]->(:Clue {projectId: $pid}) "
+                            + "RETURN DISTINCT ch.mysqlId AS mysqlId, ch.title AS title, ch.number AS number",
+                    Values.parameters("pid", projectId));
+            while (chResult.hasNext()) {
+                var record = chResult.next();
+                NovelGraphPanelVO.GraphNode node = NovelGraphPanelVO.GraphNode.of(
+                        "Chapter", record.get("mysqlId").asLong(),
+                        record.get("title").asString(""), 3);
+                node.getProperties().put("number", record.get("number").asInt(0));
+                nodes.add(node);
+            }
+
+            // ADVANCES 边
+            var relResult = session.run(
+                    "MATCH (ch:Chapter {projectId: $pid})-[r:ADVANCES {projectId: $pid}]->(cl:Clue {projectId: $pid}) "
+                            + "RETURN ch.mysqlId AS sourceId, cl.mysqlId AS targetId, r.description AS description",
+                    Values.parameters("pid", projectId));
+            while (relResult.hasNext()) {
+                var record = relResult.next();
+                NovelGraphPanelVO.GraphEdge edge = NovelGraphPanelVO.GraphEdge.builder()
+                        .source("Chapter_" + record.get("sourceId").asLong())
+                        .target("Clue_" + record.get("targetId").asLong())
+                        .label("ADVANCES")
+                        .properties(new java.util.LinkedHashMap<>())
+                        .build();
+                String desc = record.get("description").asString(null);
+                if (desc != null) {
+                    edge.getProperties().put("description", desc);
+                }
+                edges.add(edge);
+            }
+        }
+
+        panel.setNodes(nodes);
+        panel.setEdges(edges);
+        panel.setLegends(buildEdgeLegends(new String[]{"ADVANCES"}));
+        return panel;
+    }
+
+    /**
+     * 地点人物分布图 —— 展示每个地点当前有哪些角色
+     *
+     * 节点：Location + Character
+     * 边：CURRENTLY_AT（Character → Location）
+     *
+     * 作者可以一眼看到：某个场景里有多少角色、某个角色是不是"飘在空中"（没有位置）。
+     */
+    public NovelGraphPanelVO queryLocationCharacterGraph(Long projectId) {
+        NovelGraphPanelVO panel = NovelGraphPanelVO.builder()
+                .graphType("location_character")
+                .projectId(projectId)
+                .groups(NovelGraphPanelVO.defaultGroups())
+                .warnings(new java.util.ArrayList<>())
+                .build();
+
+        java.util.List<NovelGraphPanelVO.GraphNode> nodes = new java.util.ArrayList<>();
+        java.util.List<NovelGraphPanelVO.GraphEdge> edges = new java.util.ArrayList<>();
+        java.util.Set<String> linkedCharacterIds = new java.util.HashSet<>();
+
+        try (Session session = novelNeo4jDriver.session()) {
+            // 地点节点（group=1 蓝色方形）
+            var locResult = session.run(
+                    "MATCH (l:Location {projectId: $pid}) WHERE l.archived IS NULL OR NOT l.archived "
+                            + "RETURN l.mysqlId AS mysqlId, l.name AS name, l.type AS type",
+                    Values.parameters("pid", projectId));
+            while (locResult.hasNext()) {
+                var record = locResult.next();
+                NovelGraphPanelVO.GraphNode node = NovelGraphPanelVO.GraphNode.of(
+                        "Location", record.get("mysqlId").asLong(),
+                        record.get("name").asString(""), 1);
+                node.getProperties().put("type", record.get("type").asString(""));
+                nodes.add(node);
+            }
+
+            // CURRENTLY_AT 边 + 角色节点
+            var relResult = session.run(
+                    "MATCH (c:Character {projectId: $pid})-[r:CURRENTLY_AT {projectId: $pid}]->(l:Location {projectId: $pid}) "
+                            + "RETURN c.mysqlId AS charId, c.name AS charName, c.status AS charStatus, "
+                            + "l.mysqlId AS locId",
+                    Values.parameters("pid", projectId));
+            while (relResult.hasNext()) {
+                var record = relResult.next();
+                long charId = record.get("charId").asLong();
+                String charIdStr = "Character_" + charId;
+
+                // 去重：同一个角色可能出现在多条 CURRENTLY_AT 中
+                if (linkedCharacterIds.add(charIdStr)) {
+                    NovelGraphPanelVO.GraphNode charNode = NovelGraphPanelVO.GraphNode.of(
+                            "Character", charId,
+                            record.get("charName").asString(""), 0);
+                    charNode.getProperties().put("status", record.get("charStatus").asString(""));
+                    nodes.add(charNode);
+                }
+
+                edges.add(NovelGraphPanelVO.GraphEdge.builder()
+                        .source(charIdStr)
+                        .target("Location_" + record.get("locId").asLong())
+                        .label("CURRENTLY_AT")
+                        .properties(new java.util.LinkedHashMap<>())
+                        .build());
+            }
+        }
+
+        panel.setNodes(nodes);
+        panel.setEdges(edges);
+        panel.setLegends(buildEdgeLegends(new String[]{"CURRENTLY_AT"}));
+        return panel;
+    }
+
+    /**
+     * 道具流转图 —— 道具在被谁持有、在哪些章节出场
+     *
+     * 节点：Item + Character + Chapter
+     * 边：POSSESSES（Character → Item）、APPEARS_IN（Item → Chapter）
+     *
+     * 作者可以追踪某个关键道具（如秘笈、信物）的完整流转历史。
+     */
+    public NovelGraphPanelVO queryItemFlowGraph(Long projectId) {
+        NovelGraphPanelVO panel = NovelGraphPanelVO.builder()
+                .graphType("item_flow")
+                .projectId(projectId)
+                .groups(NovelGraphPanelVO.defaultGroups())
+                .warnings(new java.util.ArrayList<>())
+                .build();
+
+        java.util.List<NovelGraphPanelVO.GraphNode> nodes = new java.util.ArrayList<>();
+        java.util.List<NovelGraphPanelVO.GraphEdge> edges = new java.util.ArrayList<>();
+        java.util.Set<String> seenNodeIds = new java.util.HashSet<>();
+
+        try (Session session = novelNeo4jDriver.session()) {
+            // 物品节点（group=4 橙色点）
+            var itemResult = session.run(
+                    "MATCH (i:Item {projectId: $pid}) WHERE i.archived IS NULL OR NOT i.archived "
+                            + "RETURN i.mysqlId AS mysqlId, i.name AS name, i.status AS status, i.type AS type",
+                    Values.parameters("pid", projectId));
+            while (itemResult.hasNext()) {
+                var record = itemResult.next();
+                NovelGraphPanelVO.GraphNode node = NovelGraphPanelVO.GraphNode.of(
+                        "Item", record.get("mysqlId").asLong(),
+                        record.get("name").asString(""), 4);
+                node.getProperties().put("status", record.get("status").asString(""));
+                node.getProperties().put("type", record.get("type").asString(""));
+                nodes.add(node);
+                seenNodeIds.add(node.getId());
+            }
+
+            // POSSESSES 边（角色持有物品）
+            var possessResult = session.run(
+                    "MATCH (c:Character {projectId: $pid})-[r:POSSESSES {projectId: $pid}]->(i:Item {projectId: $pid}) "
+                            + "RETURN c.mysqlId AS charId, c.name AS charName, i.mysqlId AS itemId",
+                    Values.parameters("pid", projectId));
+            while (possessResult.hasNext()) {
+                var record = possessResult.next();
+                String charIdStr = "Character_" + record.get("charId").asLong();
+
+                if (seenNodeIds.add(charIdStr)) {
+                    NovelGraphPanelVO.GraphNode charNode = NovelGraphPanelVO.GraphNode.of(
+                            "Character", record.get("charId").asLong(),
+                            record.get("charName").asString(""), 0);
+                    nodes.add(charNode);
+                }
+
+                edges.add(NovelGraphPanelVO.GraphEdge.builder()
+                        .source(charIdStr)
+                        .target("Item_" + record.get("itemId").asLong())
+                        .label("POSSESSES")
+                        .properties(new java.util.LinkedHashMap<>())
+                        .build());
+            }
+
+            // APPEARS_IN 边（物品在章节出场）
+            var appearResult = session.run(
+                    "MATCH (i:Item {projectId: $pid})-[r:APPEARS_IN {projectId: $pid}]->(ch:Chapter {projectId: $pid}) "
+                            + "RETURN i.mysqlId AS itemId, ch.mysqlId AS chapterId, ch.title AS chapterTitle, ch.number AS chapterNo",
+                    Values.parameters("pid", projectId));
+            while (appearResult.hasNext()) {
+                var record = appearResult.next();
+                String chIdStr = "Chapter_" + record.get("chapterId").asLong();
+
+                if (seenNodeIds.add(chIdStr)) {
+                    NovelGraphPanelVO.GraphNode chNode = NovelGraphPanelVO.GraphNode.of(
+                            "Chapter", record.get("chapterId").asLong(),
+                            record.get("chapterTitle").asString(""), 3);
+                    chNode.getProperties().put("number", record.get("chapterNo").asInt(0));
+                    nodes.add(chNode);
+                }
+
+                edges.add(NovelGraphPanelVO.GraphEdge.builder()
+                        .source("Item_" + record.get("itemId").asLong())
+                        .target(chIdStr)
+                        .label("APPEARS_IN")
+                        .properties(new java.util.LinkedHashMap<>())
+                        .build());
+            }
+        }
+
+        panel.setNodes(nodes);
+        panel.setEdges(edges);
+        panel.setLegends(buildEdgeLegends(new String[]{"POSSESSES", "APPEARS_IN"}));
+        return panel;
+    }
+
+    /**
+     * 构建边图例 —— 每条边类型给一种颜色
+     *
+     * 这是一个纯前端视觉约定，但放在后端统一输出可以避免前后端各写一套颜色映射。
+     */
+    private java.util.List<NovelGraphPanelVO.GraphLegend> buildEdgeLegends(String[] relationTypes) {
+        String[] colors = {"#3498db", "#e74c3c", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#e67e22", "#34495e"};
+        java.util.List<NovelGraphPanelVO.GraphLegend> legends = new java.util.ArrayList<>();
+        for (int i = 0; i < relationTypes.length; i++) {
+            legends.add(NovelGraphPanelVO.GraphLegend.builder()
+                    .index(i)
+                    .name(relationTypes[i])
+                    .color(colors[i % colors.length])
+                    .lineStyle("solid")
+                    .build());
+        }
+        return legends;
     }
 }

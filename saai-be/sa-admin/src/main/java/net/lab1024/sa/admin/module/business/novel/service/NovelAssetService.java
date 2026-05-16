@@ -34,6 +34,15 @@ import net.lab1024.sa.admin.module.business.novel.domain.form.NovelEventAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelItemAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelLocationAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelNarrativeRuleAddForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelAliasUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCheatUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelCharacterUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelClueUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelEventUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelItemUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelLocationUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelNarrativeRuleUpdateForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelVolumeUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelVolumeAddForm;
 import net.lab1024.sa.base.common.domain.PageResult;
 import net.lab1024.sa.base.common.domain.ResponseDTO;
@@ -494,5 +503,201 @@ public class NovelAssetService {
      */
     private NovelProjectEntity getProjectOrNull(Long projectId) {
         return novelProjectService.getAvailableProject(projectId);
+    }
+
+    // ==================== 资产详情（单条查询） ====================
+
+    public NovelCharacterEntity getCharacterDetail(Long characterId) {
+        return novelCharacterDao.selectById(characterId);
+    }
+    public NovelLocationEntity getLocationDetail(Long locationId) {
+        return novelLocationDao.selectById(locationId);
+    }
+    public NovelClueEntity getClueDetail(Long clueId) {
+        return novelClueDao.selectById(clueId);
+    }
+    public NovelVolumeEntity getVolumeDetail(Long volumeId) {
+        return novelVolumeDao.selectById(volumeId);
+    }
+    public NovelItemEntity getItemDetail(Long itemId) {
+        return novelItemDao.selectById(itemId);
+    }
+    public NovelEventEntity getEventDetail(Long eventId) {
+        return novelEventDao.selectById(eventId);
+    }
+    public NovelCheatEntity getCheatDetail(Long cheatId) {
+        return novelCheatDao.selectById(cheatId);
+    }
+    public NovelAliasEntity getAliasDetail(Long aliasId) {
+        return novelAliasDao.selectById(aliasId);
+    }
+    public NovelNarrativeRuleEntity getNarrativeRuleDetail(Long ruleId) {
+        return novelNarrativeRuleDao.selectById(ruleId);
+    }
+
+    // ==================== 资产编辑 ====================
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateCharacter(NovelCharacterUpdateForm form) {
+        NovelCharacterEntity entity = novelCharacterDao.selectById(form.getCharacterId());
+        if (entity == null) return ResponseDTO.userErrorParam("角色不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelCharacterDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateLocation(NovelLocationUpdateForm form) {
+        NovelLocationEntity entity = novelLocationDao.selectById(form.getLocationId());
+        if (entity == null) return ResponseDTO.userErrorParam("地点不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelLocationDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateClue(NovelClueUpdateForm form) {
+        NovelClueEntity entity = novelClueDao.selectById(form.getClueId());
+        if (entity == null) return ResponseDTO.userErrorParam("线索不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelClueDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateVolume(NovelVolumeUpdateForm form) {
+        NovelVolumeEntity entity = novelVolumeDao.selectById(form.getVolumeId());
+        if (entity == null) return ResponseDTO.userErrorParam("卷不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelVolumeDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateItem(NovelItemUpdateForm form) {
+        NovelItemEntity entity = novelItemDao.selectById(form.getItemId());
+        if (entity == null) return ResponseDTO.userErrorParam("物品不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelItemDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateEvent(NovelEventUpdateForm form) {
+        NovelEventEntity entity = novelEventDao.selectById(form.getEventId());
+        if (entity == null) return ResponseDTO.userErrorParam("事件不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelEventDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateCheat(NovelCheatUpdateForm form) {
+        NovelCheatEntity entity = novelCheatDao.selectById(form.getCheatId());
+        if (entity == null) return ResponseDTO.userErrorParam("金手指不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelCheatDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateAlias(NovelAliasUpdateForm form) {
+        NovelAliasEntity entity = novelAliasDao.selectById(form.getAliasId());
+        if (entity == null) return ResponseDTO.userErrorParam("马甲不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelAliasDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> updateNarrativeRule(NovelNarrativeRuleUpdateForm form) {
+        NovelNarrativeRuleEntity entity = novelNarrativeRuleDao.selectById(form.getRuleId());
+        if (entity == null) return ResponseDTO.userErrorParam("叙事规则不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelNarrativeRuleDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    // ==================== 资产归档（软删除） ====================
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveCharacter(Long characterId) {
+        NovelCharacterEntity entity = novelCharacterDao.selectById(characterId);
+        if (entity == null) return ResponseDTO.userErrorParam("角色不存在");
+        entity.setDeletedFlag(true);
+        novelCharacterDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveLocation(Long locationId) {
+        NovelLocationEntity entity = novelLocationDao.selectById(locationId);
+        if (entity == null) return ResponseDTO.userErrorParam("地点不存在");
+        entity.setDeletedFlag(true);
+        novelLocationDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveClue(Long clueId) {
+        NovelClueEntity entity = novelClueDao.selectById(clueId);
+        if (entity == null) return ResponseDTO.userErrorParam("线索不存在");
+        entity.setDeletedFlag(true);
+        novelClueDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveVolume(Long volumeId) {
+        NovelVolumeEntity entity = novelVolumeDao.selectById(volumeId);
+        if (entity == null) return ResponseDTO.userErrorParam("卷不存在");
+        entity.setDeletedFlag(true);
+        novelVolumeDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveItem(Long itemId) {
+        NovelItemEntity entity = novelItemDao.selectById(itemId);
+        if (entity == null) return ResponseDTO.userErrorParam("物品不存在");
+        entity.setDeletedFlag(true);
+        novelItemDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveEvent(Long eventId) {
+        NovelEventEntity entity = novelEventDao.selectById(eventId);
+        if (entity == null) return ResponseDTO.userErrorParam("事件不存在");
+        entity.setDeletedFlag(true);
+        novelEventDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveCheat(Long cheatId) {
+        NovelCheatEntity entity = novelCheatDao.selectById(cheatId);
+        if (entity == null) return ResponseDTO.userErrorParam("金手指不存在");
+        entity.setDeletedFlag(true);
+        novelCheatDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveAlias(Long aliasId) {
+        NovelAliasEntity entity = novelAliasDao.selectById(aliasId);
+        if (entity == null) return ResponseDTO.userErrorParam("马甲不存在");
+        entity.setDeletedFlag(true);
+        novelAliasDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archiveNarrativeRule(Long ruleId) {
+        NovelNarrativeRuleEntity entity = novelNarrativeRuleDao.selectById(ruleId);
+        if (entity == null) return ResponseDTO.userErrorParam("叙事规则不存在");
+        entity.setDeletedFlag(true);
+        novelNarrativeRuleDao.updateById(entity);
+        return ResponseDTO.ok(true);
     }
 }

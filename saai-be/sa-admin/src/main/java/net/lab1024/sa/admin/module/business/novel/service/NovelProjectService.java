@@ -8,6 +8,7 @@ import net.lab1024.sa.admin.module.business.novel.dao.NovelProjectDao;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelProjectEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelProjectAddForm;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelProjectQueryForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelProjectUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelProjectVO;
 import net.lab1024.sa.admin.util.AdminRequestUtil;
 import net.lab1024.sa.base.common.domain.PageResult;
@@ -68,5 +69,30 @@ public class NovelProjectService {
         return novelProjectDao.selectOne(new LambdaQueryWrapper<NovelProjectEntity>()
                 .eq(NovelProjectEntity::getProjectId, projectId)
                 .eq(NovelProjectEntity::getDeletedFlag, false));
+    }
+
+    public ResponseDTO<NovelProjectEntity> detail(Long projectId) {
+        NovelProjectEntity entity = getAvailableProject(projectId);
+        if (entity == null) return ResponseDTO.userErrorParam("小说项目不存在");
+        return ResponseDTO.ok(entity);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> update(NovelProjectUpdateForm form) {
+        NovelProjectEntity entity = getAvailableProject(form.getProjectId());
+        if (entity == null) return ResponseDTO.userErrorParam("小说项目不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelProjectDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ResponseDTO<Boolean> archive(Long projectId) {
+        NovelProjectEntity entity = getAvailableProject(projectId);
+        if (entity == null) return ResponseDTO.userErrorParam("小说项目不存在");
+        entity.setDeletedFlag(true);
+        entity.setStatus(NovelProjectStatusEnum.ARCHIVED.getValue());
+        novelProjectDao.updateById(entity);
+        return ResponseDTO.ok(true);
     }
 }

@@ -6,9 +6,11 @@ import jakarta.annotation.Resource;
 import net.lab1024.sa.admin.module.business.novel.dao.NovelChapterDao;
 import net.lab1024.sa.admin.module.business.novel.domain.entity.NovelChapterEntity;
 import net.lab1024.sa.admin.module.business.novel.domain.form.NovelChapterQueryForm;
+import net.lab1024.sa.admin.module.business.novel.domain.form.NovelChapterUpdateForm;
 import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelChapterVO;
 import net.lab1024.sa.base.common.domain.PageResult;
 import net.lab1024.sa.base.common.domain.ResponseDTO;
+import net.lab1024.sa.base.common.util.SmartBeanUtil;
 import net.lab1024.sa.base.common.util.SmartPageUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
@@ -74,5 +76,21 @@ public class NovelChapterService {
         } else {
             novelChapterDao.updateById(chapter);
         }
+    }
+
+    public ResponseDTO<Boolean> update(NovelChapterUpdateForm form) {
+        NovelChapterEntity entity = novelChapterDao.selectById(form.getChapterId());
+        if (entity == null) return ResponseDTO.userErrorParam("章节不存在");
+        SmartBeanUtil.copyProperties(form, entity);
+        novelChapterDao.updateById(entity);
+        return ResponseDTO.ok(true);
+    }
+
+    public ResponseDTO<Boolean> archive(Long chapterId) {
+        NovelChapterEntity entity = novelChapterDao.selectById(chapterId);
+        if (entity == null) return ResponseDTO.userErrorParam("章节不存在");
+        entity.setDeletedFlag(true);
+        novelChapterDao.updateById(entity);
+        return ResponseDTO.ok(true);
     }
 }

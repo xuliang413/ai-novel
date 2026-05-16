@@ -32,6 +32,14 @@ public class NovelContentReviewPassForm {
     private String content;
 
     /**
+     * 用户审阅后修改的标题；为空则沿用当前标题。
+     *
+     * 前端写作工作台允许用户在正文审阅页直接改标题，然后一次性提交。
+     * 如果不同时支持标题编辑，前端就需要单独调 /novel/chapter/update，破坏单步提交体验。
+     */
+    private String title;
+
+    /**
      * 用户审阅后修改的摘要；为空则使用当前摘要。
      */
     private String summary;

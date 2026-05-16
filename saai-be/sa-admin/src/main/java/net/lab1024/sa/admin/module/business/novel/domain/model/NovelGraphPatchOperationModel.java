@@ -157,9 +157,17 @@ public class NovelGraphPatchOperationModel {
      * 置信度。
      *
      * 常见取值 HIGH / MEDIUM / LOW。LOW 一般默认不勾选，
-     * 让作者自己判断“AI 这条是不是想多了”。
+     * 让作者自己判断"AI 这条是不是想多了"。
      */
     private String confidence;
+
+    /**
+     * 风险等级 —— 从 NovelGraphPatchOperationTypeEnum.riskLevel 赋值。
+     *
+     * LOW=默认勾选，MEDIUM=默认勾选但需确认，HIGH=默认不勾选，需用户手动确认。
+     * 前端根据此字段决定每条操作的默认勾选状态和展示颜色。
+     */
+    private String riskLevel;
 
     /**
      * 校验状态。

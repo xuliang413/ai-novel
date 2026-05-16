@@ -28,6 +28,11 @@ public class NovelChapterEntity implements Serializable {
     private Long projectId;
 
     /**
+     * 所属卷 ID（可选，没有时直连 Project）。
+     */
+    private Long volumeId;
+
+    /**
      * 章节序号。
      */
     private Integer chapterNo;
@@ -46,6 +51,11 @@ public class NovelChapterEntity implements Serializable {
      * 章节正文。
      */
     private String content;
+
+    /**
+     * 逻辑删除标识。
+     */
+    private Boolean deletedFlag;
 
     /**
      * 章节状态。
