@@ -52,7 +52,10 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.beans.PropertyDescriptor;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 小说设定服务——角色、地点、线索的增删查，新增时同步到 Neo4j 图谱。
@@ -505,6 +508,41 @@ public class NovelAssetService {
         return novelProjectService.getAvailableProject(projectId);
     }
 
+    /**
+     * 只复制源对象中的非 null 属性到目标对象
+     *
+     * 为什么不用 SmartBeanUtil.copyProperties：
+     * Spring BeanUtils.copyProperties 会把源对象的所有字段（包括 null 值）都复制到目标。
+     * 在编辑场景中，前端只传了用户修改的那几个字段，其他字段是 null（Java 默认值）。
+     * 如果用默认复制，未传的字段会把 entity 中的已有值覆盖为 null —— 数据丢失。
+     * 这里的实现收集源对象中值为 null 的属性名，传给 copyProperties 的 ignore 参数跳过它们。
+     */
+    private void copyNonNull(Object source, Object target) {
+        Set<String> nullNames = new HashSet<>();
+        try {
+            java.beans.BeanInfo beanInfo = java.beans.Introspector.getBeanInfo(source.getClass());
+            for (PropertyDescriptor pd : beanInfo.getPropertyDescriptors()) {
+                // 跳过 class 属性（每个对象都有 getClass()）
+                if ("class".equals(pd.getName())) continue;
+                java.lang.reflect.Method getter = pd.getReadMethod();
+                if (getter != null) {
+                    try {
+                        Object value = getter.invoke(source);
+                        if (value == null) {
+                            nullNames.add(pd.getName());
+                        }
+                    } catch (Exception ignored) {
+                        // 无法读取的属性跳过
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // 反射失败时退化为 Spring copyProperties（全量复制）
+        }
+        String[] ignore = nullNames.toArray(new String[0]);
+        org.springframework.beans.BeanUtils.copyProperties(source, target, ignore);
+    }
+
     // ==================== 资产详情（单条查询） ====================
 
     public NovelCharacterEntity getCharacterDetail(Long characterId) {
@@ -536,12 +574,13 @@ public class NovelAssetService {
     }
 
     // ==================== 资产编辑 ====================
+    // 每个 update 方法统一：1)查 ID  2)判空+判已归档  3)copyNonNull（跳过 null 字段）4)updateById
 
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateCharacter(NovelCharacterUpdateForm form) {
         NovelCharacterEntity entity = novelCharacterDao.selectById(form.getCharacterId());
-        if (entity == null) return ResponseDTO.userErrorParam("角色不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("角色不存在");
+        copyNonNull(form, entity);
         novelCharacterDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -549,8 +588,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateLocation(NovelLocationUpdateForm form) {
         NovelLocationEntity entity = novelLocationDao.selectById(form.getLocationId());
-        if (entity == null) return ResponseDTO.userErrorParam("地点不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("地点不存在");
+        copyNonNull(form, entity);
         novelLocationDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -558,8 +597,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateClue(NovelClueUpdateForm form) {
         NovelClueEntity entity = novelClueDao.selectById(form.getClueId());
-        if (entity == null) return ResponseDTO.userErrorParam("线索不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("线索不存在");
+        copyNonNull(form, entity);
         novelClueDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -567,8 +606,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateVolume(NovelVolumeUpdateForm form) {
         NovelVolumeEntity entity = novelVolumeDao.selectById(form.getVolumeId());
-        if (entity == null) return ResponseDTO.userErrorParam("卷不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("卷不存在");
+        copyNonNull(form, entity);
         novelVolumeDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -576,8 +615,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateItem(NovelItemUpdateForm form) {
         NovelItemEntity entity = novelItemDao.selectById(form.getItemId());
-        if (entity == null) return ResponseDTO.userErrorParam("物品不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("物品不存在");
+        copyNonNull(form, entity);
         novelItemDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -585,8 +624,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateEvent(NovelEventUpdateForm form) {
         NovelEventEntity entity = novelEventDao.selectById(form.getEventId());
-        if (entity == null) return ResponseDTO.userErrorParam("事件不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("事件不存在");
+        copyNonNull(form, entity);
         novelEventDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -594,8 +633,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateCheat(NovelCheatUpdateForm form) {
         NovelCheatEntity entity = novelCheatDao.selectById(form.getCheatId());
-        if (entity == null) return ResponseDTO.userErrorParam("金手指不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("金手指不存在");
+        copyNonNull(form, entity);
         novelCheatDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -603,8 +642,8 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateAlias(NovelAliasUpdateForm form) {
         NovelAliasEntity entity = novelAliasDao.selectById(form.getAliasId());
-        if (entity == null) return ResponseDTO.userErrorParam("马甲不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("马甲不存在");
+        copyNonNull(form, entity);
         novelAliasDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
@@ -612,18 +651,19 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> updateNarrativeRule(NovelNarrativeRuleUpdateForm form) {
         NovelNarrativeRuleEntity entity = novelNarrativeRuleDao.selectById(form.getRuleId());
-        if (entity == null) return ResponseDTO.userErrorParam("叙事规则不存在");
-        SmartBeanUtil.copyProperties(form, entity);
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("叙事规则不存在");
+        copyNonNull(form, entity);
         novelNarrativeRuleDao.updateById(entity);
         return ResponseDTO.ok(true);
     }
 
     // ==================== 资产归档（软删除） ====================
+    // 归档已检查 deletedFlag：防止误操作已删除的数据
 
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveCharacter(Long characterId) {
         NovelCharacterEntity entity = novelCharacterDao.selectById(characterId);
-        if (entity == null) return ResponseDTO.userErrorParam("角色不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("角色不存在");
         entity.setDeletedFlag(true);
         novelCharacterDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -632,7 +672,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveLocation(Long locationId) {
         NovelLocationEntity entity = novelLocationDao.selectById(locationId);
-        if (entity == null) return ResponseDTO.userErrorParam("地点不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("地点不存在");
         entity.setDeletedFlag(true);
         novelLocationDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -641,7 +681,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveClue(Long clueId) {
         NovelClueEntity entity = novelClueDao.selectById(clueId);
-        if (entity == null) return ResponseDTO.userErrorParam("线索不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("线索不存在");
         entity.setDeletedFlag(true);
         novelClueDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -650,7 +690,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveVolume(Long volumeId) {
         NovelVolumeEntity entity = novelVolumeDao.selectById(volumeId);
-        if (entity == null) return ResponseDTO.userErrorParam("卷不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("卷不存在");
         entity.setDeletedFlag(true);
         novelVolumeDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -659,7 +699,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveItem(Long itemId) {
         NovelItemEntity entity = novelItemDao.selectById(itemId);
-        if (entity == null) return ResponseDTO.userErrorParam("物品不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("物品不存在");
         entity.setDeletedFlag(true);
         novelItemDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -668,7 +708,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveEvent(Long eventId) {
         NovelEventEntity entity = novelEventDao.selectById(eventId);
-        if (entity == null) return ResponseDTO.userErrorParam("事件不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("事件不存在");
         entity.setDeletedFlag(true);
         novelEventDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -677,7 +717,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveCheat(Long cheatId) {
         NovelCheatEntity entity = novelCheatDao.selectById(cheatId);
-        if (entity == null) return ResponseDTO.userErrorParam("金手指不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("金手指不存在");
         entity.setDeletedFlag(true);
         novelCheatDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -686,7 +726,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveAlias(Long aliasId) {
         NovelAliasEntity entity = novelAliasDao.selectById(aliasId);
-        if (entity == null) return ResponseDTO.userErrorParam("马甲不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("马甲不存在");
         entity.setDeletedFlag(true);
         novelAliasDao.updateById(entity);
         return ResponseDTO.ok(true);
@@ -695,7 +735,7 @@ public class NovelAssetService {
     @Transactional(rollbackFor = Exception.class)
     public ResponseDTO<Boolean> archiveNarrativeRule(Long ruleId) {
         NovelNarrativeRuleEntity entity = novelNarrativeRuleDao.selectById(ruleId);
-        if (entity == null) return ResponseDTO.userErrorParam("叙事规则不存在");
+        if (entity == null || Boolean.TRUE.equals(entity.getDeletedFlag())) return ResponseDTO.userErrorParam("叙事规则不存在");
         entity.setDeletedFlag(true);
         novelNarrativeRuleDao.updateById(entity);
         return ResponseDTO.ok(true);
