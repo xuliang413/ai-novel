@@ -5,8 +5,9 @@ import lombok.Getter;
 import net.lab1024.sa.base.common.enumeration.BaseEnum;
 
 /**
- * 亲缘类型枚举(IS_FAMILY_OF关系)
- * 涵盖血缘亲属和师门关系: FATHER/MOTHER/BROTHER/SISTER/SON/DAUGHTER/COUSIN/SPOUSE/MASTER/DISCIPLE
+ * IS_FAMILY_OF 关系类型枚举。
+ * <p>
+ * 用于描述角色之间的血缘、婚姻和师门关系，作为 Neo4j IS_FAMILY_OF 边的 familyType 属性。
  *
  * @Author AI-Novel
  */
@@ -64,7 +65,13 @@ public enum NovelFamilyTypeEnum implements BaseEnum {
      */
     DISCIPLE("DISCIPLE", "弟子");
 
+    /**
+     * 枚举值，写入 MySQL 的 family_type，并同步到 Neo4j 的 familyType 属性。
+     */
     private final String value;
 
+    /**
+     * 中文说明，用于管理页展示和接口文档说明。
+     */
     private final String desc;
 }

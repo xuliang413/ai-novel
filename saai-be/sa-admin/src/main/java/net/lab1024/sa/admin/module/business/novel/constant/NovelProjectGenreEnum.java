@@ -54,7 +54,13 @@ public enum NovelProjectGenreEnum implements BaseEnum {
      */
     FANTASY("FANTASY", "奇幻");
 
+    /**
+     * 存入数据库和接口传输使用的稳定类型编码。
+     */
     private final String value;
 
+    /**
+     * 给人看的类型说明，用于 Swagger 枚举说明和前端展示。
+     */
     private final String desc;
 }

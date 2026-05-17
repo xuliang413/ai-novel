@@ -35,7 +35,13 @@ public enum NovelCharacterRoleEnum implements BaseEnum {
      */
     MINOR("MINOR", "次要角色");
 
+    /**
+     * 存入数据库和接口传输使用的稳定角色定位编码。
+     */
     private final String value;
 
+    /**
+     * 给人看的角色定位说明，用于 Swagger 枚举说明和前端展示。
+     */
     private final String desc;
 }

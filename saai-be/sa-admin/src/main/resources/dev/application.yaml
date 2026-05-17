@@ -46,6 +46,11 @@ novel:
   prompt:
     system-template-prefix: "你是一位专业网文作家，请遵循以下规则："
     user-template-prefix: "请续写以下小说的第{chapterNumber}章："
+    narrative-rule-section-title: "叙事规则"
+    project-constraint-section-title: "项目约束"
+    context-section-title: "写作上下文"
+    instruction-section-title: "写作指令"
+    truncation-notice: "注意：部分上下文已被压缩或丢弃，请优先遵守已保留的高优先级信息。"
 
 # Neo4j 图数据库连接配置
 neo4j:

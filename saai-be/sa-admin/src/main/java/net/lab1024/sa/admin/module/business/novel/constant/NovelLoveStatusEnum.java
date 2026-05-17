@@ -5,8 +5,9 @@ import lombok.Getter;
 import net.lab1024.sa.base.common.enumeration.BaseEnum;
 
 /**
- * 爱慕状态枚举(LOVES关系)
- * UNREQUITED单恋, MUTUAL两情相悦, PAST过去式
+ * LOVES 关系状态枚举。
+ * <p>
+ * 用于描述角色之间爱慕关系当前处于单恋、双向或过去式，作为 Neo4j LOVES 边的 status 属性。
  *
  * @Author AI-Novel
  */
@@ -29,7 +30,13 @@ public enum NovelLoveStatusEnum implements BaseEnum {
      */
     PAST("PAST", "过去式");
 
+    /**
+     * 枚举值，写入 MySQL 的 love_status，并同步到 Neo4j 的 status 属性。
+     */
     private final String value;
 
+    /**
+     * 中文说明，用于管理页展示和接口文档说明。
+     */
     private final String desc;
 }

@@ -24,7 +24,13 @@ public enum NovelClueSubTypeEnum implements BaseEnum {
      */
     FORESHADOWING("FORESHADOWING", "伏笔");
 
+    /**
+     * 存入数据库和接口传输使用的稳定线索子类型编码。
+     */
     private final String value;
 
+    /**
+     * 给人看的线索子类型说明，用于 Swagger 枚举说明和前端展示。
+     */
     private final String desc;
 }

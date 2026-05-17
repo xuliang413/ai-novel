@@ -18,9 +18,15 @@ import java.time.LocalDateTime;
 @TableName("t_novel_character")
 public class NovelCharacterEntity {
 
+    /**
+     * 角色ID, 由数据库自增生成, 也是 Neo4j Character 节点的业务主键
+     */
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /**
+     * 所属项目ID, 所有角色查询都必须带上它做项目隔离
+     */
     private Long projectId;
 
     /**
@@ -80,11 +86,23 @@ public class NovelCharacterEntity {
      */
     private String currentStatus;
 
+    /**
+     * 归档标记, false 表示正常可见, true 表示已归档
+     */
     private Boolean deletedFlag;
 
+    /**
+     * 创建用户ID, 所有用户级查询都必须带上它做数据隔离
+     */
     private Long createUserId;
 
+    /**
+     * 最后更新时间, 由数据库自动维护, 用于人工审阅角色最近变化
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间, 由数据库自动维护, 用于角色列表默认排序
+     */
     private LocalDateTime createTime;
 }

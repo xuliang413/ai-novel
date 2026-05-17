@@ -316,7 +316,29 @@ CREATE TABLE IF NOT EXISTS `t_novel_character_relation` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '小说角色关系表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 14. 角色金手指关联表 (t_novel_character_cheat)
+-- 14. 角色当前位置表 (t_novel_character_location)
+-- 记录角色当前所在地以及移动发生章节, 仅通过写作流程GraphPatch写入
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `t_novel_character_location` (
+  `id` bigint(0) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `project_id` bigint(0) NOT NULL COMMENT '所属项目ID',
+  `character_id` bigint(0) NOT NULL COMMENT '角色ID',
+  `location_id` bigint(0) NOT NULL COMMENT '地点ID',
+  `location_name` varchar(200) DEFAULT NULL COMMENT '地点名称冗余, 便于日志和审阅页展示',
+  `entered_in_chapter` int(0) DEFAULT NULL COMMENT '角色移动到该地点的章节号',
+  `current_flag` tinyint(0) NOT NULL DEFAULT 1 COMMENT '是否当前所在地: 1当前 0历史',
+  `deleted_flag` tinyint(0) NOT NULL DEFAULT 0 COMMENT '归档标记',
+  `create_user_id` bigint(0) NOT NULL COMMENT '创建用户ID',
+  `update_time` datetime(0) NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_time` datetime(0) NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_project_char_current`(`project_id`, `character_id`, `current_flag`) USING BTREE,
+  INDEX `idx_project_location`(`project_id`, `location_id`) USING BTREE,
+  INDEX `idx_create_user`(`create_user_id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '角色当前位置表' ROW_FORMAT = Dynamic;
+
+-- --------------------------------------------------------
+-- 15. 角色金手指关联表 (t_novel_character_cheat)
 -- 角色持有金手指, 记录获得章节
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_novel_character_cheat` (
@@ -336,7 +358,7 @@ CREATE TABLE IF NOT EXISTS `t_novel_character_cheat` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '角色金手指关联表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 15. 章节出场记录表 (t_novel_chapter_appearance)
+-- 16. 章节出场记录表 (t_novel_chapter_appearance)
 -- 记录每章出场了哪些实体
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_novel_chapter_appearance` (
@@ -359,7 +381,7 @@ CREATE TABLE IF NOT EXISTS `t_novel_chapter_appearance` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '章节出场记录表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 16. 线索推进记录表 (t_novel_clue_advance)
+-- 17. 线索推进记录表 (t_novel_clue_advance)
 -- 记录每章对线索的推进
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_novel_clue_advance` (
@@ -381,7 +403,7 @@ CREATE TABLE IF NOT EXISTS `t_novel_clue_advance` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '线索推进记录表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 17. 用户API Key表 (t_user_api_key)
+-- 18. 用户API Key表 (t_user_api_key)
 -- 按模型用途分类: CHAT(对话)/EMBEDDING(向量)/RERANK(重排)
 -- 每种类型一条记录, 各自独立配置url+key+模型名, 完全解耦
 -- --------------------------------------------------------
@@ -404,7 +426,7 @@ CREATE TABLE IF NOT EXISTS `t_user_api_key` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '用户API Key表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 18. 写作会话表 (t_chapter_generation_session)
+-- 19. 写作会话表 (t_chapter_generation_session)
 -- 每次写作的完整流程记录, 黑匣子
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_chapter_generation_session` (
@@ -433,7 +455,7 @@ CREATE TABLE IF NOT EXISTS `t_chapter_generation_session` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '章节生成会话表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 19. 图谱变更日志表 (t_graph_change_log)
+-- 20. 图谱变更日志表 (t_graph_change_log)
 -- 记录每次GraphPatch执行结果, 支持撤销
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_graph_change_log` (
@@ -458,7 +480,7 @@ CREATE TABLE IF NOT EXISTS `t_graph_change_log` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '图谱变更日志表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 20. 写作日志表 (t_writing_log)
+-- 21. 写作日志表 (t_writing_log)
 -- 每章生成后自动记录字数/Token/耗时
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_writing_log` (
@@ -483,7 +505,7 @@ CREATE TABLE IF NOT EXISTS `t_writing_log` (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '写作日志表' ROW_FORMAT = Dynamic;
 
 -- --------------------------------------------------------
--- 21. 写作日历表 (t_writing_calendar)
+-- 22. 写作日历表 (t_writing_calendar)
 -- 记录日期和章节/字数的对应关系
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `t_writing_calendar` (

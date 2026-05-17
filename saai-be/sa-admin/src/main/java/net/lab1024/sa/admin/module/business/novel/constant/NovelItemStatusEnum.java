@@ -34,7 +34,13 @@ public enum NovelItemStatusEnum implements BaseEnum {
      */
     LOST("LOST", "遗失");
 
+    /**
+     * 存入数据库和接口传输使用的稳定物品状态编码。
+     */
     private final String value;
 
+    /**
+     * 给人看的物品状态说明，用于 Swagger 枚举说明和前端展示。
+     */
     private final String desc;
 }

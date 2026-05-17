@@ -50,7 +50,13 @@ public enum NovelLocationTypeEnum implements BaseEnum {
      */
     BATTLEFIELD("BATTLEFIELD", "战场");
 
+    /**
+     * 存入数据库和接口传输使用的稳定地点类型编码。
+     */
     private final String value;
 
+    /**
+     * 给人看的地点类型说明，用于 Swagger 枚举说明和前端展示。
+     */
     private final String desc;
 }

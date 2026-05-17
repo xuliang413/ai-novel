@@ -17,6 +17,9 @@ import java.time.LocalDateTime;
 @TableName("t_novel_project")
 public class NovelProjectEntity {
 
+    /**
+     * 项目ID, 由数据库自增生成, 也是 Neo4j Project 节点的业务主键
+     */
     @TableId(type = IdType.AUTO)
     private Long id;
 
@@ -92,7 +95,13 @@ public class NovelProjectEntity {
      */
     private String remark;
 
+    /**
+     * 最后更新时间, 由数据库自动维护, 用于列表排序和人工审阅变更时间
+     */
     private LocalDateTime updateTime;
 
+    /**
+     * 创建时间, 由数据库自动维护, 用于项目初始化顺序和分页默认排序
+     */
     private LocalDateTime createTime;
 }
