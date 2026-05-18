@@ -42,15 +42,20 @@ novel:
       default-model: qwen3-rerank
       default-timeout: 30000
 
-  # AI小说提示词模板配置 (后续Task使用)
+  # AI小说提示词模板配置
   prompt:
-    system-template-prefix: "你是一位专业网文作家，请遵循以下规则："
-    user-template-prefix: "请续写以下小说的第{chapterNumber}章："
-    narrative-rule-section-title: "叙事规则"
-    project-constraint-section-title: "项目约束"
-    context-section-title: "写作上下文"
-    instruction-section-title: "写作指令"
-    truncation-notice: "注意：部分上下文已被压缩或丢弃，请优先遵守已保留的高优先级信息。"
+    # System Prompt: 定义AI写作人设、输出格式和硬约束
+    system-template-prefix: "你是一位专业网文作家，请严格遵循以下规则进行续写："
+    system-role-description: "你是一位经验丰富的网络小说作家，擅长根据已有剧情和角色设定进行精准续写。你必须严格遵循提供的世界观、角色设定和叙事规则，确保故事前后连贯、角色行为一致。"
+    system-output-format: "输出格式要求：第一行为章节标题（## 第X章 标题），之后为正文内容。正文要求分段清晰，对话使用引号，适当使用环境描写烘托氛围。"
+    narrative-rule-section-title: "【叙事规则】"
+    project-constraint-section-title: "【项目约束】"
+    context-section-title: "【写作上下文】"
+    instruction-section-title: "【写作指令】"
+    # User Prompt: 续写入口模板, {chapterNumber}/{pov}/{targetChapterWords} 为运行时占位符
+    user-template-prefix: "请续写以下小说的第{chapterNumber}章，POV视角：{pov}，目标字数约{targetChapterWords}字。"
+    user-writing-tips: "写作要求：1)严格控制字数在目标字数±20%以内；2)保持人物性格一致性；3)线索推进自然不突兀；4)章节结尾留有悬念或钩子；5)对话真实自然，符合角色身份。"
+    truncation-notice: "注意：部分上下文因Token限制已被压缩，请优先遵守已保留的高优先级信息。如有疑问请按既有剧情逻辑推理。"
 
 # Neo4j 图数据库连接配置
 neo4j:

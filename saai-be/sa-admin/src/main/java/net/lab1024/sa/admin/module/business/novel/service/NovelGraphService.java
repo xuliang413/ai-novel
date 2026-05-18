@@ -3,13 +3,21 @@ package net.lab1024.sa.admin.module.business.novel.service;
 import jakarta.annotation.Resource;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphNodeEnum;
 import net.lab1024.sa.admin.module.business.novel.constant.NovelGraphRelationEnum;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelCharacterNetworkVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelClueHistoryVO;
+import net.lab1024.sa.admin.module.business.novel.domain.vo.NovelGraphOverviewVO;
 import org.neo4j.driver.Driver;
+import org.neo4j.driver.Record;
+import org.neo4j.driver.Result;
 import org.neo4j.driver.Session;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -245,13 +253,222 @@ public class NovelGraphService {
     }
 
     /**
-     * 执行 Cypher。
+     * 执行 Cypher（只写）。
      */
     private void execute(String cypher, Map<String, Object> params) {
-        // Session 按次创建按次关闭, Driver 由 Spring 维护单例, 避免长连接泄漏。
         try (Session session = driver.session()) {
             session.run(cypher, params);
         }
+    }
+
+    /**
+     * 执行只读 Cypher 查询并返回记录列表。
+     * <p>
+     * 图谱Controller的所有查询都必须通过此方法执行, 不允许拼接原始Cypher字符串——那条规则也适用于读查询。
+     * 返回 Result 的 list() 调用在 Neo4j Java Driver 中是惰性求值的, 这里显式收起, 避免跨 session 的 cursor 泄漏。
+     *
+     * @param cypher 只读Cypher, 由业务方法构建
+     * @param params 参数Map
+     * @return 查询到的Record列表, 查不到返回空列表
+     */
+    public List<Record> query(String cypher, Map<String, Object> params) {
+        try (Session session = driver.session()) {
+            Result result = session.run(cypher, params);
+            return result.list();
+        }
+    }
+
+    /**
+     * 查询单个节点的当前属性Map —— 用于GraphPatch before值回填。
+     * <p>
+     * 返回节点所有非null属性的Map, key为属性名, value为字符串形式。
+     * 节点不存在或已归档时返回空Map。
+     *
+     * @param nodeType 节点类型枚举
+     * @param projectId 项目ID
+     * @param nodeId 节点业务ID
+     * @return 节点当前属性Map, 查不到返回空Map
+     */
+    public Map<String, Object> queryNodeProps(NovelGraphNodeEnum nodeType, Long projectId, Object nodeId) {
+        NodeSpec spec = requireNodeSpec(nodeType);
+        String cypher = buildQueryNodePropsCypher(spec);
+        Map<String, Object> params = createNodeKeyParams(spec, projectId, nodeId);
+        List<Record> records = query(cypher, params);
+
+        if (records.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Record record = records.get(0);
+        Map<String, Object> props = new LinkedHashMap<>();
+        for (String propName : spec.allowedProps) {
+            if (record.containsKey(propName) && !record.get(propName).isNull()) {
+                props.put(propName, record.get(propName).asObject());
+            }
+        }
+        return props;
+    }
+
+    /**
+     * 构建单节点属性查询Cypher。
+     */
+    private String buildQueryNodePropsCypher(NodeSpec spec) {
+        StringBuilder sb = new StringBuilder("MATCH (n:");
+        sb.append(spec.label).append(" ").append(spec.matchPattern());
+        sb.append(") WHERE n.archived = false RETURN ");
+        int idx = 0;
+        for (String prop : spec.allowedProps) {
+            if (idx > 0) sb.append(", ");
+            sb.append("n.").append(prop).append(" AS ").append(prop);
+            idx++;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 图谱概览 —— 查询指定项目下各类型节点的数量和关系总数。
+     * <p>
+     * Cypher策略: 一次 MATCH 中同时返回 6 种标签计数 + 1 个关系计数, 减少网络往返。
+     *
+     * @param projectId 项目ID
+     * @return 图谱概览VO, 直接面向前端
+     */
+    public NovelGraphOverviewVO queryGraphOverview(Long projectId) {
+        String cypher = "MATCH (c:Character {projectId: $projectId, archived: false}) "
+                + "WITH count(c) AS characterCount "
+                + "OPTIONAL MATCH (loc:Location {projectId: $projectId, archived: false}) "
+                + "WITH characterCount, count(loc) AS locationCount "
+                + "OPTIONAL MATCH (cl:Clue {projectId: $projectId, archived: false}) "
+                + "WITH characterCount, locationCount, count(cl) AS clueCount "
+                + "OPTIONAL MATCH (ch:Chapter {projectId: $projectId, archived: false}) "
+                + "WITH characterCount, locationCount, clueCount, count(ch) AS chapterCount "
+                + "OPTIONAL MATCH ()-[r {projectId: $projectId}]->() "
+                + "RETURN characterCount, locationCount, clueCount, chapterCount, count(r) AS relationCount";
+
+        List<Record> records = query(cypher, Map.of("projectId", projectId));
+
+        NovelGraphOverviewVO vo = new NovelGraphOverviewVO();
+        vo.setProjectId(projectId);
+        if (!records.isEmpty()) {
+            Record r = records.get(0);
+            vo.setCharacterCount(r.get("characterCount").asLong());
+            vo.setLocationCount(r.get("locationCount").asLong());
+            vo.setClueCount(r.get("clueCount").asLong());
+            vo.setChapterCount(r.get("chapterCount").asLong());
+            vo.setRelationCount(r.get("relationCount").asLong());
+            vo.setNodeCount(vo.getCharacterCount() + vo.getLocationCount()
+                    + vo.getClueCount() + vo.getChapterCount());
+        }
+        return vo;
+    }
+
+    /**
+     * 角色关系网 —— 查询指定项目下所有角色节点和它们之间的关系边。
+     * <p>
+     * 返回 nodes + edges 结构, 前端 @antv/g6 直接渲染。
+     *
+     * @param projectId 项目ID
+     * @return 角色关系网VO
+     */
+    public NovelCharacterNetworkVO queryCharacterNetwork(Long projectId) {
+        String nodeCypher = "MATCH (c:Character {projectId: $projectId, archived: false}) "
+                + "RETURN c.characterId AS id, c.name AS label, c.roleType AS roleType, "
+                + "c.currentEmotion AS currentEmotion, c.currentStatus AS currentStatus "
+                + "ORDER BY c.name";
+
+        List<Record> nodeRecords = query(nodeCypher, Map.of("projectId", projectId));
+        List<NovelCharacterNetworkVO.GraphNode> nodes = new ArrayList<>();
+        for (Record r : nodeRecords) {
+            NovelCharacterNetworkVO.GraphNode node = new NovelCharacterNetworkVO.GraphNode();
+            node.setId(String.valueOf(r.get("id").asLong()));
+            node.setLabel(r.get("label").asString());
+            node.setRoleType(r.get("roleType", ""));
+            node.setCurrentEmotion(r.get("currentEmotion", ""));
+            node.setCurrentStatus(r.get("currentStatus", ""));
+            node.setGroup(r.get("roleType", "MINOR"));
+            nodes.add(node);
+        }
+
+        String relCypher = "MATCH (a:Character {projectId: $projectId, archived: false})"
+                + "-[r {projectId: $projectId}]->(b:Character {projectId: $projectId, archived: false}) "
+                + "RETURN a.characterId AS source, b.characterId AS target, type(r) AS relationType, "
+                + "r.relationType AS relationLabel, r.loveStatus AS loveStatus, r.familyType AS familyType";
+
+        List<Record> relRecords = query(relCypher, Map.of("projectId", projectId));
+        List<NovelCharacterNetworkVO.GraphEdge> edges = new ArrayList<>();
+        for (Record r : relRecords) {
+            NovelCharacterNetworkVO.GraphEdge edge = new NovelCharacterNetworkVO.GraphEdge();
+            edge.setSource(String.valueOf(r.get("source").asLong()));
+            edge.setTarget(String.valueOf(r.get("target").asLong()));
+            edge.setRelationType(r.get("relationType").asString());
+            String relationLabel = r.get("relationLabel", (Object) null) != null
+                    ? String.valueOf(r.get("relationLabel"))
+                    : (r.get("loveStatus", (Object) null) != null
+                        ? String.valueOf(r.get("loveStatus"))
+                        : (r.get("familyType", (Object) null) != null
+                            ? String.valueOf(r.get("familyType"))
+                            : r.get("relationType").asString()));
+            edge.setRelationLabel(relationLabel);
+            edges.add(edge);
+        }
+
+        NovelCharacterNetworkVO vo = new NovelCharacterNetworkVO();
+        vo.setProjectId(projectId);
+        vo.setNodes(nodes);
+        vo.setEdges(edges);
+        return vo;
+    }
+
+    /**
+     * 线索推进历史 —— 查询指定线索被哪些章节推进的记录。
+     * <p>
+     * 通过 ADVANCES 关系回溯, 按章节号升序返回每次推进的描述和揭露程度。
+     *
+     * @param projectId 项目ID
+     * @param clueId MySQL线索ID
+     * @return 线索推进历史VO
+     */
+    public NovelClueHistoryVO queryClueHistory(Long projectId, Long clueId) {
+        String cypher = "MATCH (cl:Clue {projectId: $projectId, clueId: $clueId, archived: false}) "
+                + "OPTIONAL MATCH (ch:Chapter {projectId: $projectId})-[r:ADVANCES]->(cl) "
+                + "RETURN cl.name AS clueName, cl.clueStatus AS clueStatus, "
+                + "ch.chapterNumber AS chapterNumber, ch.title AS chapterTitle, "
+                + "r.progressDescription AS progressDescription, r.revealLevel AS revealLevel "
+                + "ORDER BY ch.chapterNumber";
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("projectId", projectId);
+        params.put("clueId", clueId);
+
+        List<Record> records = query(cypher, params);
+        List<NovelClueHistoryVO.AdvanceRecord> history = new ArrayList<>();
+        String clueName = null;
+        String clueStatus = null;
+
+        for (Record r : records) {
+            if (clueName == null) {
+                clueName = r.get("clueName", "");
+                clueStatus = r.get("clueStatus", "");
+            }
+            if (r.get("chapterNumber").isNull()) continue;
+
+            NovelClueHistoryVO.AdvanceRecord record = new NovelClueHistoryVO.AdvanceRecord();
+            record.setChapterNumber(r.get("chapterNumber").asInt());
+            record.setChapterTitle(r.get("chapterTitle", ""));
+            record.setProgressDescription(r.get("progressDescription", ""));
+            Object rl = r.get("revealLevel");
+            if (rl instanceof Number) {
+                record.setRevealLevel(BigDecimal.valueOf(((Number) rl).doubleValue()));
+            }
+            history.add(record);
+        }
+
+        NovelClueHistoryVO vo = new NovelClueHistoryVO();
+        vo.setClueId(clueId);
+        vo.setClueName(clueName);
+        vo.setClueStatus(clueStatus);
+        vo.setHistory(history);
+        return vo;
     }
 
     /**

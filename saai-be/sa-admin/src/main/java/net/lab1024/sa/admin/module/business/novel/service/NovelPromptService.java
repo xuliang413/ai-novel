@@ -189,6 +189,11 @@ public class NovelPromptService {
     private String buildSystemPrompt(NovelProjectEntity projectEntity, List<NovelNarrativeRuleEntity> rules) {
         StringBuilder builder = new StringBuilder();
         appendLine(builder, promptProperties.getSystemTemplatePrefix());
+        appendLine(builder, "");
+        appendLine(builder, promptProperties.getSystemRoleDescription());
+        appendLine(builder, "");
+        appendLine(builder, promptProperties.getSystemOutputFormat());
+        appendLine(builder, "");
         appendSection(builder, promptProperties.getNarrativeRuleSectionTitle());
         if (rules.isEmpty()) {
             appendLine(builder, "- 暂无额外叙事规则。");
@@ -230,6 +235,8 @@ public class NovelPromptService {
         appendLine(builder, "- 本章意图：" + defaultText(context.getChapterIntent(), "按既有剧情自然推进"));
         appendLine(builder, "- 用户指令：" + defaultText(context.getUserDirection(), "无"));
         appendLine(builder, "- POV：" + defaultText(context.getPov(), "未指定"));
+        appendLine(builder, "");
+        appendLine(builder, promptProperties.getUserWritingTips());
         if (Objects.nonNull(context.getTokenStats()) && Boolean.TRUE.equals(context.getTokenStats().getTruncated())) {
             appendLine(builder, promptProperties.getTruncationNotice());
         }

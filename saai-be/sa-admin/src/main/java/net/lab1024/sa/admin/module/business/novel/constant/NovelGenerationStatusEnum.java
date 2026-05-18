@@ -59,4 +59,19 @@ public enum NovelGenerationStatusEnum implements BaseEnum {
     private final String value;
 
     private final String desc;
+
+    /**
+     * 根据字符串值查找对应的枚举, 找不到返回null。
+     * 用于从数据库或JSON反序列化状态时快速映射。
+     *
+     * @param value 枚举字符串值
+     * @return 匹配的枚举, 未匹配返回null
+     */
+    public static NovelGenerationStatusEnum fromValue(String value) {
+        if (value == null) return null;
+        for (NovelGenerationStatusEnum e : values()) {
+            if (e.value.equals(value)) return e;
+        }
+        return null;
+    }
 }

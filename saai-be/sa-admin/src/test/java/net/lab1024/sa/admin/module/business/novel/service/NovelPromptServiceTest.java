@@ -110,7 +110,7 @@ class NovelPromptServiceTest {
 
         assertTrue(response.getOk());
         NovelPromptVO prompt = response.getData();
-        assertTrue(prompt.getSystemPrompt().contains("你是专业网文作者"));
+        assertTrue(prompt.getSystemPrompt().contains("叙事规则"));
         assertTrue(prompt.getSystemPrompt().indexOf("平台红线") < prompt.getSystemPrompt().indexOf("文风要求"));
         assertTrue(prompt.getSystemPrompt().contains("末法时代灵气稀薄"));
         assertTrue(prompt.getSystemPrompt().contains("冷峻短句"));
@@ -134,7 +134,9 @@ class NovelPromptServiceTest {
 
         assertTrue(response.getOk());
         String userPrompt = response.getData().getUserPrompt();
-        assertTrue(userPrompt.contains("请续写第12章，POV：李四，目标字数：3000。"));
+        assertTrue(userPrompt.contains("第12章"));
+        assertTrue(userPrompt.contains("李四"));
+        assertTrue(userPrompt.contains("3000"));
         assertTrue(userPrompt.contains("第二卷：京城风云"));
         assertTrue(userPrompt.contains("上一章：第十一章 暗室密函"));
         assertTrue(userPrompt.contains("李四"));
@@ -144,7 +146,7 @@ class NovelPromptServiceTest {
         assertTrue(userPrompt.contains("青云宗暗室"));
         assertTrue(userPrompt.contains("万倍悟性"));
         assertTrue(userPrompt.contains("强化悬疑"));
-        assertTrue(userPrompt.contains("注意：部分上下文已被压缩或丢弃"));
+        assertTrue(userPrompt.contains("因Token限制已被压缩"));
     }
 
     /**

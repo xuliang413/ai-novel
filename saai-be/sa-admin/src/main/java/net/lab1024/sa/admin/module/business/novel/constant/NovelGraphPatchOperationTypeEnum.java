@@ -141,4 +141,18 @@ public enum NovelGraphPatchOperationTypeEnum {
 
     /** 默认风险等级: LOW默认勾选, HIGH默认不勾选 */
     private final NovelPatchRiskLevel riskLevel;
+
+    /**
+     * 根据编码查枚举, 用于GraphPatch JSON解析和逆操作生成。
+     *
+     * @param code 操作类型编码
+     * @return 匹配的枚举, 未匹配返回null
+     */
+    public static NovelGraphPatchOperationTypeEnum fromCode(String code) {
+        if (code == null) return null;
+        for (NovelGraphPatchOperationTypeEnum e : values()) {
+            if (e.code.equals(code)) return e;
+        }
+        return null;
+    }
 }
